@@ -140,6 +140,33 @@ void evm_memory_copy(ECP *req) {
   }
 }
 
+uint16_t local_debug_counter = 0;
+uint8_t local_debug_enable = 0;
+uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
+
+void check_debug_buffer() {
+  if (!local_debug_enable) return;
+
+  uint16_t *debug_counter = evm_cin_addr + 0xc;
+  uint32_t *debug_buffer_base = 0xa0000000;
+  uint32_t *data = get_output_buffer() + sizeof(ECP);
+
+  for (uint16_t target = *debug_counter; local_debug_counter != target; local_debug_counter++) {
+    // pc
+	data[0] = debug_buffer_base[local_debug_counter * 4 + 0];
+
+    // gas temporarily set to 0
+
+    // stack size
+    data[3] = debug_buffer_base[local_debug_counter * 4 + 3];
+
+	memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+	build_outgoing_packet(32);
+
+	usleep(1000);
+  }
+}
+
 void ecp(uint8_t *buf) {
   uint8_t tmp[16];
   memcpy(tmp, buf, 16);
@@ -166,6 +193,11 @@ void ecp(uint8_t *buf) {
     // host tell evm to start
     *(uint8_t*)evm_cin_addr = 1;
 
+    return;
+  }
+  else if (req->opcode == DEBUG && req->src == HOST) {
+	local_debug_enable = req->func;
+	*(uint8_t*)0x410000008ll = req->func;
     return;
   }
 
@@ -195,11 +227,13 @@ void ecp(uint8_t *buf) {
     uint32_t *stack_size = (uint32_t*)(evm_env_addr + 0x1c0);
     data[3] = *stack_size;
 
+    /*
     // stack elements
     uint32_t *stack_data = (uint32_t*)(evm_stack_addr);
     memcpy_b(&data[4], stack_data, 32 * *stack_size);
+	*/
 
-    content_length = 4 + 32 * *stack_size;
+    content_length = 16;
   }
   else if (req->opcode == COPY) {
     if (req->src == STORAGE) {
@@ -390,7 +424,7 @@ void ecp(uint8_t *buf) {
 
     // COPY stack
     uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-    uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 8024);
+    uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 0x8024);
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
     data[0] = numItem = *stackSize;
     offset = 4;
@@ -438,12 +472,11 @@ void ecp(uint8_t *buf) {
   }
 
   // resume execution
-  if (req->dest != HOST) {
+  if (req->dest != HOST || req->opcode == DEBUG) {
 #ifdef SIMULATION
       memcpy(get_output_buffer(), "activate", 8);
       build_outgoing_packet(8);
 #endif
-
 	 *(char*)(evm_cin_addr + 4) = evm_active;
   }
 }
@@ -451,7 +484,7 @@ void ecp(uint8_t *buf) {
 void check_evm_output() {
   uint8_t *p = (uint8_t*)evm_cout_addr;
 
-  if (ECP_OFFSET(p)->opcode != NONE) {
+  if (evm_active && (ECP_OFFSET(p)->opcode != NONE)) {
     // there is an operation
     // delegate to ecp
     ecp(p);

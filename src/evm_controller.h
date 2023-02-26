@@ -54,5 +54,6 @@ extern int evm_active;
 void ecp(uint8_t *buf);
 void clear_storage();
 void check_evm_output();
+void check_debug_buffer();
 
 #endif

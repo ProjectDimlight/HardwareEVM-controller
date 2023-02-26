@@ -13,33 +13,9 @@ int main(void)
 
 	// wait for a host
 	// after receiving any packet, it will memorize the socket
-	int cnt = 0, led_on = 1;
+	int cnt = 0, led_on = 1, started = 0;
 	uint8_t *led_ptr = 0x480000000ll;
 	*led_ptr = led_on;
-
-	while (1) {
-		cnt ++;
-		if (cnt == 1000000) {
-			cnt = 0;
-			led_on = led_on >= 8 ? 1 : (led_on << 1);
-			*led_ptr = led_on;
-		}
-
-		uint8_t *p = check_incoming_packet();
-		if (p) {
-#ifdef SIMULATION
-			memcpy(get_output_buffer(), p, input_size);
-		    build_outgoing_packet(input_size);
-#endif
-			break;
-		}
-	}
-
-#ifdef SIMULATION
-    memcpy(get_output_buffer(), "check network", 13);
-    build_outgoing_packet(13);
-
-#endif
 
 #ifdef SIMULATION
 	require_sim_ram_reply = 1;
@@ -52,9 +28,23 @@ int main(void)
 #endif
 
 		uint8_t *p = check_incoming_packet();
-	    if (p) ecp(p);
+	    if (p) {
+	    	ecp(p);
+	    	started = 1;
+			*led_ptr = 0xf;
+	    }
 
     	check_evm_output();
+    	check_debug_buffer();
+
+    	if (!started) {
+			cnt ++;
+			if (cnt == 1000000) {
+				cnt = 0;
+				led_on = led_on >= 8 ? 1 : (led_on << 1);
+				*led_ptr = led_on;
+			}
+    	}
 	}
 
 	return 0;
