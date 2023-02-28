@@ -150,20 +150,19 @@ void check_debug_buffer() {
   uint16_t *debug_counter = evm_cin_addr + 0xc;
   uint32_t *debug_buffer_base = 0xa0000000;
   uint32_t *data = get_output_buffer() + sizeof(ECP);
+  uint16_t target = *debug_counter;
 
-  for (uint16_t target = *debug_counter; local_debug_counter != target; local_debug_counter++) {
+  for (; local_debug_counter != target; local_debug_counter++) {
     // pc
-	data[0] = debug_buffer_base[local_debug_counter * 4 + 0];
+	data[0] = debug_buffer_base[(local_debug_counter & 511) * 4 + 0];
 
     // gas temporarily set to 0
 
     // stack size
-    data[3] = debug_buffer_base[local_debug_counter * 4 + 3];
+    data[3] = debug_buffer_base[(local_debug_counter & 511) * 4 + 3];
 
 	memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
 	build_outgoing_packet(32);
-
-	usleep(1000);
   }
 }
 

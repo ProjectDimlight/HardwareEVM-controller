@@ -31,7 +31,6 @@ int main(void)
 	    if (p) {
 	    	ecp(p);
 	    	started = 1;
-			*led_ptr = 0xf;
 	    }
 
     	check_evm_output();
@@ -44,6 +43,9 @@ int main(void)
 				led_on = led_on >= 8 ? 1 : (led_on << 1);
 				*led_ptr = led_on;
 			}
+    	}else
+    	{
+    		*led_ptr = (*(char*)0x410000004 ? 0xf : 0x0);
     	}
 	}
 
