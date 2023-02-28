@@ -303,24 +303,25 @@ void ecp(uint8_t *buf) {
       uint32_t* data = (uint32_t*)addr_dest;
       // commit dirty item
       uint32_t offset = 1;
-      data[0] = (req->length & 0x2) >> 1;
+      data[0] = req->length & 0x1;		// dirty bit
       if (data[0]) {
         for (int i = 0; i < 16; i++)
           data[i + 1] = slot[i];
         uint32_t tmp = data[1] & 0xffffffc0;
-        data[1] = tmp | (req->src_offset << 6);
-        slot[0] = tmp & 0x01;  // clean dirty bit
+        data[1] = tmp | (req->src_offset >> 6);
+        slot[0] = slot[0] ^ 0x10;  		// clean dirty bit
         offset += 16;
       }
-      // require missing item
-      data[offset] = (req->length & 0x1);
       if (data[0]) while(ECP_OFFSET(evm_cout_addr)->opcode == NONE);
+      // require missing item
+      data[offset] = (req->length & 0x02) >> 1;
       if (data[offset]) {
         offset++;
         for (int i = 0; i < 8; i++)
           data[i + offset] = slot[i];
-        data[offset] = (data[offset] & 0xffffffc0) + (req->src_offset >> 6);
+        data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
       }
+      content_length = (offset + 8) * 4;
     }
     else { // swap memory
       if (req->func) { // has dirty page to send back
