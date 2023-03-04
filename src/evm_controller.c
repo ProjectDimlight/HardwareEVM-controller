@@ -153,13 +153,9 @@ void check_debug_buffer() {
   uint16_t target = *debug_counter;
 
   for (; local_debug_counter != target; local_debug_counter++) {
-    // pc
-	data[0] = debug_buffer_base[(local_debug_counter & 511) * 4 + 0];
-
-    // gas temporarily set to 0
-
-    // stack size
-    data[3] = debug_buffer_base[(local_debug_counter & 511) * 4 + 3];
+	// pc4, gas8, stacksize4
+	for (int i = 0; i < 4; i++)
+		data[i] = debug_buffer_base[(local_debug_counter & 511) * 4 + i];
 
 	memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
 	build_outgoing_packet(32);
@@ -300,6 +296,7 @@ void ecp(uint8_t *buf) {
     if (req->src == STORAGE) {
       uint32_t* slot = (uint32_t*)(evm_storage_addr + req->src_offset);
       uint32_t* data = (uint32_t*)addr_dest;
+
       // commit dirty item
       uint32_t offset = 1;
       data[0] = req->length & 0x1;		// dirty bit
@@ -311,7 +308,8 @@ void ecp(uint8_t *buf) {
         slot[0] = slot[0] ^ 0x10;  		// clean dirty bit
         offset += 16;
       }
-      if (data[0]) while(ECP_OFFSET(evm_cout_addr)->opcode == NONE);
+      // if (data[0]) while(ECP_OFFSET(evm_cout_addr)->opcode == NONE);
+
       // require missing item
       data[offset] = (req->length & 0x02) >> 1;
       if (data[offset]) {
