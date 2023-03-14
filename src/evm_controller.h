@@ -13,7 +13,8 @@ enum EvmProtocolOperation {
   SWAP,   // cache swap (mem and storage) req invoked by evm; host should reply with a "copy"
   END,    // contract execution over; evm send all storage change to host
   DEBUG,  // evm send {pc, gas, stackSize, all stack data} to host
-  QUERY   // require the host to send information to hevm
+  QUERY,  // require the host to send information to hevm
+  LOG     // log instruction
 };
 
 enum DebugFunc {

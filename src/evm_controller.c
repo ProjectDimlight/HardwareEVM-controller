@@ -3,9 +3,9 @@
 #include "sim_ram.h"
 
 void wait(int time) {
-	time *= 1000000;
-	for (int i = 0; i < time; i++);
-	return;
+  time *= 1000000;
+  for (int i = 0; i < time; i++);
+  return;
 }
 
 void *memcpy_b(void *dst0, void *src0, uint32_t len0)
@@ -153,12 +153,12 @@ void check_debug_buffer() {
   uint16_t target = *debug_counter;
 
   for (; local_debug_counter != target; local_debug_counter++) {
-	// pc4, gas8, stacksize4
-	for (int i = 0; i < 4; i++)
-		data[i] = debug_buffer_base[(local_debug_counter & 511) * 4 + i];
+  // gas8, pc4, stacksize4, gap16, res32
+  for (int i = 0; i < 16; i++)
+    data[i] = debug_buffer_base[(local_debug_counter & 127) * 16 + i];
 
-	memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
-	build_outgoing_packet(32);
+  memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+  build_outgoing_packet(16 + 64);
   }
 }
 
@@ -167,34 +167,48 @@ void ecp(uint8_t *buf) {
   memcpy(tmp, buf, 16);
   ECP *req = (ECP*)tmp;
 
-  if (req->opcode == CALL && req->src == HOST) {
-    // clear memory valid tag
-    // code: clear except first page
-    for (int i = 0; i < NUMBER_OF_PAGES; i++)
-      clear_tag(CODE, i << 10);
-    // calldata: clear except first page
-    for (int i = 0; i < NUMBER_OF_PAGES; i++)
-      clear_tag(CALLDATA, i << 10);
-    // returndata: clear all
-    for (int i = 0; i < NUMBER_OF_PAGES; i++)
-      clear_tag(RETURNDATA, i << 10);
-    // memory: clear all
-    for (int i = 0; i < NUMBER_OF_PAGES; i++)
-      clear_tag(MEM, i << 10);
+  if (req->src == HOST) {
+    if (req->opcode == CALL) {
+      // clear memory valid tag
+      // code: clear except first page
+      for (int i = 0; i < NUMBER_OF_PAGES; i++)
+        clear_tag(CODE, i << 10);
+      // calldata: clear except first page
+      for (int i = 0; i < NUMBER_OF_PAGES; i++)
+        clear_tag(CALLDATA, i << 10);
+      // returndata: clear all
+      for (int i = 0; i < NUMBER_OF_PAGES; i++)
+        clear_tag(RETURNDATA, i << 10);
+      // memory: clear all
+      for (int i = 0; i < NUMBER_OF_PAGES; i++)
+        clear_tag(MEM, i << 10);
 
-    // record status
-    evm_active = 1;
+      // record status
+      evm_active = 1;
 
-    // host tell evm to start
-    *(uint8_t*)evm_cin_addr = 1;
+      // host tell evm to start
+      *(uint8_t*)evm_cin_addr = 1;
 
-    return;
+      return;
+    }
+    else if (req->opcode == DEBUG) {
+      if (req->func == 2)
+        req->func = !local_debug_enable;
+      local_debug_enable = req->func;
+      *(uint8_t*)(evm_cin_addr + 8) = req->func;
+      return;
+    }
+    else if (req->opcode == END){
+      // this should not happen when hevm is correct
+      // it is temporary added to restart hevm when it gets stuck
+
+      // tell hevm to stop
+      evm_active = 0;
+      *(char*)(evm_cin_addr + 4) = 0;
+      return;
+    }
   }
-  else if (req->opcode == DEBUG && req->src == HOST) {
-	local_debug_enable = req->func;
-	*(uint8_t*)0x410000008ll = req->func;
-    return;
-  }
+  
 
   void *addr_src, *addr_dest;
   uint32_t content_length = req->length;
@@ -226,7 +240,7 @@ void ecp(uint8_t *buf) {
     // stack elements
     uint32_t *stack_data = (uint32_t*)(evm_stack_addr);
     memcpy_b(&data[4], stack_data, 32 * *stack_size);
-	*/
+  */
 
     content_length = 16;
   }
@@ -249,20 +263,21 @@ void ecp(uint8_t *buf) {
     else if (req->dest == STACK) {
       // COPY stack
       uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-      uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 0x8024);
+      volatile uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 0x8024);
       uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
 
-      for (int i = *stackSize; i; i--) {
-        // pop
-        *stackOp = 0;
+      if (req->func == 1) {  // clear all current contents
+        for (int i = *stackSize; i; i--) {
+          // pop
+          *stackOp = 0;
+        }
       }
 
       // Then push
       uint32_t numItem = *(uint32_t*)addr_src;
-      uint8_t* data = (uint8_t*)addr_src + 4 + 32 * numItem;
+      uint8_t* data = (uint8_t*)addr_src + 4;
 
-      for (int i = numItem; i; i--) {
-        data -= 32;
+      for (int i = 0; i < numItem; i++, data += 32) {
         memcpy_b(stackData, data, 32);
         *stackOp = 1;
       }
@@ -308,21 +323,22 @@ void ecp(uint8_t *buf) {
         slot[0] = slot[0] ^ 0x10;  		// clean dirty bit
         offset += 16;
       }
-      // if (data[0]) while(ECP_OFFSET(evm_cout_addr)->opcode == NONE);
 
       // require missing item
-      data[offset] = (req->length & 0x02) >> 1;
+      data[offset] = (req->length & 0x2) >> 1;
       if (data[offset]) {
         offset++;
+        slot = (uint32_t*)(evm_storage_addr + 0xff00);
         for (int i = 0; i < 8; i++)
           data[i + offset] = slot[i];
         data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
+        offset += 8;
       }
-      content_length = (offset + 8) * 4;
+      content_length = offset * 4;
     }
     else { // swap memory
       if (req->func) { // has dirty page to send back
-    	  memcpy_b(addr_dest, addr_src, req->length);
+        memcpy_b(addr_dest, addr_src, req->length);
       } else {
         content_length = 0;
       }
@@ -333,6 +349,10 @@ void ecp(uint8_t *buf) {
 #endif
   }
   else if (req->opcode == END) {
+    // before actually ending the run
+    // print all traces
+    check_debug_buffer();
+
     // Send a COPY before sending END
     uint32_t numItem = 0, offset = 1;
     uint32_t* data = (uint32_t*)addr_dest;
@@ -373,6 +393,10 @@ void ecp(uint8_t *buf) {
     evm_active = 0;
   }
   else if (req->opcode == CALL) {
+    // before actually ending the run
+    // print all traces
+    check_debug_buffer();
+
     // evm call to host
     // First send current environment to host
     ECP *buf = get_output_buffer();
@@ -421,25 +445,32 @@ void ecp(uint8_t *buf) {
     build_outgoing_packet(sizeof(ECP) + buf->length);
 
     // COPY stack
-    uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-    uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 0x8024);
+    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
-    data[0] = numItem = *stackSize;
+    numItem = *stackSize;
     offset = 4;
-    for (int i = numItem; i; i--, offset += 32) {
+    for (int i = numItem, count = 0, flag = 1; i; i--, offset += 32) {
       // fetch the top of the stack
-    	memcpy_b(data8 + offset, stackData, 32);
+      // which is always mapped to offset 0
+      memcpy_b(data8 + offset, evm_stack_addr, 32);
       // then pop
       *stackOp = 0;
-    }
+      count ++;
+      if (count == 32 || i == 1) {
+        buf->opcode = COPY;
+        buf->src = STACK;
+        buf->dest = HOST;
+        buf->func = flag;  // flag = 1 means start new transmission (clear current stack content), = 0 means continue
+        buf->src_offset = 0;
+        buf->dest_offset = 0;
+        buf->length = 32 * count + 4;
+        data[0] = count;
+        build_outgoing_packet(sizeof(ECP) + buf->length);
 
-    buf->opcode = COPY;
-    buf->src = STACK;
-    buf->dest = HOST;
-    buf->src_offset = 0;
-    buf->dest_offset = 0;
-    buf->length = 32 * numItem + 4;
-    build_outgoing_packet(sizeof(ECP) + buf->length);
+        flag = 0;
+        count = 0;
+      }
+    }
 
     // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
@@ -453,29 +484,34 @@ void ecp(uint8_t *buf) {
   else if (req->opcode == QUERY) {
     // queries need an address (or blockid) as param
     // which is always located at the top of the stack
-
     content_length = 32;
     memcpy_b(addr_dest, evm_stack_addr, content_length);
+  }
+  else if (req->opcode == LOG) {
+    // [TODO] send the stack contents to host
+    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+    for (int i = 0; i < req->func; i++)
+      *stackOp = 0;
   }
 
   // construct header and send
   if (req->dest == HOST) {
-	memcpy_b(get_output_buffer(), req, sizeof(ECP));
+    memcpy_b(get_output_buffer(), req, sizeof(ECP));
     build_outgoing_packet(sizeof(ECP) + content_length);
   }
 
   // clear local ECP
   if (buf == (uint8_t*)evm_cout_addr) {
-	  ECP_OFFSET(buf)->opcode = 0;
+    ECP_OFFSET(buf)->opcode = 0;
   }
 
   // resume execution
-  if (req->dest != HOST || req->opcode == DEBUG) {
+  if (req->dest != HOST || req->opcode == LOG || req->opcode == DEBUG) {
 #ifdef SIMULATION
       memcpy(get_output_buffer(), "activate", 8);
       build_outgoing_packet(8);
 #endif
-	 *(char*)(evm_cin_addr + 4) = evm_active;
+   *(char*)(evm_cin_addr + 4) = evm_active;
   }
 }
 
