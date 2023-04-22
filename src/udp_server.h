@@ -47,6 +47,7 @@ void *get_output_buffer();
 
 uint8_t *check_incoming_packet();
 void build_outgoing_packet(uint32_t len);
+void build_raw_packet(uint32_t len);
 
 void network_timer_check();
 void start_application(void);

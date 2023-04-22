@@ -24,4 +24,16 @@
 		<nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
 		<nature>org.eclipse.cdt.managedbuilder.core.ScannerConfigNature</nature>
 	</natures>
+	<linkedResources>
+		<link>
+			<name>common</name>
+			<type>2</type>
+			<location>E:/Tools/Xilinx/Vitis/2021.2/data/embeddedsw/lib/sw_services/xilsecure_v4_6/src/common</location>
+		</link>
+		<link>
+			<name>zynqmp</name>
+			<type>2</type>
+			<location>E:/Tools/Xilinx/Vitis/2021.2/data/embeddedsw/lib/sw_services/xilsecure_v4_6/src/zynqmp</location>
+		</link>
+	</linkedResources>
 </projectDescription>

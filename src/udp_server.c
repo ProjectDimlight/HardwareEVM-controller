@@ -54,10 +54,21 @@ void *get_output_buffer() {
 
 uint8_t *check_incoming_packet() {
 	xemacif_input(&server_netif);
-	return input_valid ? (input_valid = 0, buf_in) : (uint8_t*)0;
+	return input_valid && icm_decrypt(buf_in) ? (input_valid = 0, buf_in) : NULL;
+}
+
+void build_raw_packet(uint32_t len) {
+	struct pbuf *obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+	pbuf_take(obuf, buf_out, len);
+
+	udp_sendto(tpcb, obuf, &taddr, tport);
+	pbuf_free(obuf);
 }
 
 void build_outgoing_packet(uint32_t len) {
+	// encrypt and sign before sending
+	len += icm_encrypt(buf_out);
+
 	struct pbuf *obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
 	pbuf_take(obuf, buf_out, len);
 
@@ -66,9 +77,12 @@ void build_outgoing_packet(uint32_t len) {
 }
 
 static void build_incoming_packet(struct pbuf *p) {
-	input_valid = 1;
-	input_size = p->tot_len;
 	pbuf_copy_partial(p, buf_in, input_size, 0);
+	input_size = p->tot_len;
+	// now the packet is in the input buffer, but encrypted
+	// decrypt the payloads to secure memory
+	// and set input_valid only after the signature is checked
+	input_valid = 1;
 }
 
 /** Receive data on a udp session */
@@ -79,9 +93,9 @@ static void udp_recv_packet(void *arg, struct udp_pcb *rpcb,
 	memcpy(&taddr, addr, sizeof(ip_addr_t));
 	tport = port;
 
-	// udp_sendto(rpcb, p, addr, port);
+	udp_sendto(rpcb, p, addr, port);
 	build_incoming_packet(p);
-
+	
 	pbuf_free(p);
 	return;
 }

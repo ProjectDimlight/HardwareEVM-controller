@@ -1,12 +1,7 @@
 #include "udp_server.h"
 #include "evm_controller.h"
 #include "sim_ram.h"
-
-void wait(int time) {
-  time *= 1000000;
-  for (int i = 0; i < time; i++);
-  return;
-}
+#include "icm.h"
 
 void *memcpy_b(void *dst0, void *src0, uint32_t len0)
 {
@@ -28,22 +23,35 @@ void *memcpy_b(void *dst0, void *src0, uint32_t len0)
 // 0x10050000: environment
 // 0x10060000: stack
 
-const void* evm_base_addr 		= (void*)0x410000000ll;
-const void* evm_cin_addr  		= (void*)0x410000000ll;
-const void* evm_cout_addr 		= (void*)0x410008000ll;
-const void* evm_code_addr     	= (void*)0x410010000ll;
-const void* evm_calldata_addr 	= (void*)0x410020000ll;
-const void* evm_mem_addr 		= (void*)0x410030000ll;
-const void* evm_storage_addr 	= (void*)0x410040000ll;
-const void* evm_env_addr 		= (void*)0x410050000ll;
-const void* evm_stack_addr 		= (void*)0x410060000ll;
-const uint64_t pt_offset 		= 0x8000;
-const uint64_t page_tag_mask	= ~0xfff;
+extern void *icm_raw_data_base;
+void* const evm_base_addr 		  = (void*)0x410000000ll;
+void* const evm_cin_addr  		  = (void*)0x410000000ll;
+void* const evm_cout_addr 		  = (void*)0x410008000ll;
+void* const evm_code_addr     	= (void*)0x410010000ll;
+void* const evm_calldata_addr 	= (void*)0x410020000ll;
+void* const evm_mem_addr 		    = (void*)0x410030000ll;
+void* const evm_storage_addr 	  = (void*)0x410040000ll;
+void* const evm_env_addr 		    = (void*)0x410050000ll;
+void* const evm_stack_addr 		  = (void*)0x410060000ll;
+const uint64_t pt_offset 		    = 0x8000;
+const uint64_t page_tag_mask	  = ~0xfff;
 const uint64_t page_tagid_mask	= ~0x3ff;
-const uint64_t page_id_mask		= 0xc00;
-const uint64_t page_idof_mask	= 0xfff;
-const uint64_t page_of_mask		= 0x3ff;
-const uint64_t page_size 		= 0x400;
+const uint64_t page_id_mask		  = 0xc00;
+const uint64_t page_idof_mask	  = 0xfff;
+const uint64_t page_of_mask		  = 0x3ff;
+const uint64_t page_size 		    = 0x400;
+
+int evm_active = 0;
+
+typedef struct {
+  // memcpy_progress
+  ECP ecp;
+
+  // page_swap
+  uint32_t page_offset;
+  uint8_t valid;
+} Pending_EVM_Memory_Copy_Request;
+Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
 
 void *data_source_to_address(uint8_t data_source, uint32_t offset) {
   return (void *) (evm_base_addr + (data_source << 16) + (offset & page_idof_mask));
@@ -54,13 +62,18 @@ uint32_t *data_source_to_pte(uint8_t data_source, uint32_t offset) {
   return (uint32_t *) (evm_base_addr + (data_source << 16) + pt_offset + ((offset & page_id_mask) >> 8));
 }
 
-int evm_active = 0;
-
 void clear_tag(uint8_t data_source, uint32_t offset) {
   (*data_source_to_pte(data_source, offset)) &= ~3;  // not valid
 }
 
-void sync_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t dest_offset) {
+// here we use a tricky solution
+// this function only records the page that we requires, then exits immediately
+// after the page is swapped, we will call evm_memory_copy again
+void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t dest_offset) {
+  pending_evm_memory_copy_request.page_offset = dest_offset;
+  pending_evm_memory_copy_request.valid = 1;
+
+  // send the output request
   ECP *buf = (ECP *)get_output_buffer();
   buf->opcode = SWAP;
   buf->src = src;
@@ -77,66 +90,69 @@ void sync_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t de
     buf->func = 0;
     build_outgoing_packet(sizeof(ECP) + 0);
   }
-
-  ECP *p;
-#ifdef SIMULATION
-  require_sim_ram_reply = 1;
-  check_simram();
-  p = get_input_buffer();
-#else
-  while ((p = (ECP*)check_incoming_packet()) == 0);
-#endif
-
-  memcpy_b(data_source_to_address(src, dest_offset), p->data, p->length);
-  *data_source_to_pte(src, dest_offset) = (dest_offset & page_tagid_mask) | 0x2;
 }
 
 void evm_memory_copy(ECP *req) {
-  uint8_t src = req->src;
-  uint8_t dest = req->dest;
-  uint32_t src_offset = req->src_offset;
-  uint32_t dest_offset = req->dest_offset;
-  uint32_t length = req->length;
+  if (req)
+    pending_evm_memory_copy_request.ecp = *req;
+  req = &(pending_evm_memory_copy_request.ecp);
+  pending_evm_memory_copy_request.valid = 0;
 
   void *addr_src, *addr_dest;
   uint32_t *pte_src, *pte_dest;
 
-  while (length > 0) {
+  while (req->length > 0) {
     // before page
-    addr_src = data_source_to_address(src, src_offset);
-    addr_dest = data_source_to_address(dest, dest_offset);
+    addr_src = data_source_to_address(req->src, req->src_offset);
+    addr_dest = data_source_to_address(req->dest, req->dest_offset);
 
-    pte_src = data_source_to_pte(src, src_offset);
-    pte_dest = data_source_to_pte(dest, dest_offset);
-
-    if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tag_mask) != (src_offset & page_tag_mask)) {
-      sync_page_swap(0, src, (*pte_src) & page_tagid_mask, src_offset & page_tagid_mask);
-    }
-    if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tag_mask) != (dest_offset & page_tag_mask)) {
-      sync_page_swap(((*pte_dest) & 3) == 3, dest, (*pte_dest) & page_tagid_mask, dest_offset & page_tagid_mask);
-    }
-
+    pte_src = data_source_to_pte(req->src, req->src_offset);
+    pte_dest = data_source_to_pte(req->dest, req->dest_offset);
+    
     // get possible step length
-    uint32_t step_length = length;
-    if ((src_offset & page_of_mask) + step_length >= page_size)
-      step_length = page_size - (src_offset & page_of_mask);
-    if ((dest_offset & page_of_mask) + step_length >= page_size)
-      step_length = page_size - (dest_offset & page_of_mask);
+    uint32_t step_length = req->length;
+    if ((req->src_offset & page_of_mask) + step_length >= page_size)
+      step_length = page_size - (req->src_offset & page_of_mask);
+    if ((req->dest_offset & page_of_mask) + step_length >= page_size)
+      step_length = page_size - (req->dest_offset & page_of_mask);
 
+
+    if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tag_mask) != (req->src_offset & page_tag_mask)) {
+      async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask);
+      return;
+    }
+
+    // if the source and dest maps to the same cache-page
+    // we must use a temporary buffer to avoid data corruption
+    // in fact, if they are actually the same page, we can use memcpy_b directly
+    // but we are not implementing that now
+    if (pte_src == pte_dest) {
+      memcpy_b(icm_raw_data_base, addr_src, step_length);
+    }
+
+    if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tag_mask) != (req->dest_offset & page_tag_mask)) {
+      async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask);
+      return;
+    }
     // copy
-    memcpy_b(addr_dest, addr_src, step_length);
+    
+    if (pte_src == pte_dest) {
+      memcpy_b(addr_dest, icm_raw_data_base, step_length);
+    } else {
+      memcpy_b(addr_dest, addr_src, step_length);
+    }
 
 #ifdef SIMULATION
-    wait(5);
+    sleep(5);
     memcpy_b(get_output_buffer(), addr_src, step_length);
     build_outgoing_packet(step_length);
-    wait(5);
+    sleep(5);
 #endif
 
     // update
-    src_offset += step_length;
-    dest_offset += step_length;
-    length -= step_length;
+    req->src_offset += step_length;
+    req->dest_offset += step_length;
+    req->length -= step_length;
   }
 }
 
@@ -147,8 +163,8 @@ uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
 void check_debug_buffer() {
   if (!local_debug_enable) return;
 
-  uint16_t *debug_counter = evm_cin_addr + 0xc;
-  uint32_t *debug_buffer_base = 0xa0000000;
+  uint16_t *debug_counter = (uint16_t*)(evm_cin_addr + 0xc);
+  uint32_t *debug_buffer_base = (uint32_t*)0xa0000000;
   uint32_t *data = get_output_buffer() + sizeof(ECP);
   uint16_t target = *debug_counter;
 
@@ -162,6 +178,9 @@ void check_debug_buffer() {
   }
 }
 
+// TODO
+// no longer copy the plaintext into the output buffer
+// but to the ICM_RAW_DATA_BASE for encryption
 void ecp(uint8_t *buf) {
   uint8_t tmp[16];
   memcpy(tmp, buf, 16);
@@ -208,43 +227,26 @@ void ecp(uint8_t *buf) {
       return;
     }
   }
-  
 
   void *addr_src, *addr_dest;
   uint32_t content_length = req->length;
   if (req->src == HOST)
-    addr_src = get_input_buffer() + sizeof(ECP);
+    if (req->dest == STORAGE)  // not encrypted
+      addr_src = get_input_buffer() + sizeof(ECP);
+    else // encrypted
+      addr_src = icm_raw_data_base;
   else
     addr_src = data_source_to_address(req->src, req->src_offset);
 
   if (req->dest == HOST)
-    addr_dest = get_output_buffer() + sizeof(ECP);
+    if (req->src == STORAGE)
+      addr_dest = icm_raw_data_base;
+    else
+      addr_dest = get_output_buffer() + sizeof(ECP);
   else
     addr_dest = data_source_to_address(req->dest, req->dest_offset);
 
-  if (req->opcode == DEBUG) {
-    // fetch pc, gas, stackSize, all stack data
-    uint32_t* data = (uint32_t*)addr_dest;
-
-    // pc
-    uint32_t *pc = (uint32_t*)(evm_env_addr + 0x1e0);
-    data[0] = *pc;
-
-    // gas temporarily set to 0
-
-    // stack size
-    uint32_t *stack_size = (uint32_t*)(evm_env_addr + 0x1c0);
-    data[3] = *stack_size;
-
-    /*
-    // stack elements
-    uint32_t *stack_data = (uint32_t*)(evm_stack_addr);
-    memcpy_b(&data[4], stack_data, 32 * *stack_size);
-  */
-
-    content_length = 16;
-  }
-  else if (req->opcode == COPY) {
+  if (req->opcode == COPY) {
     if (req->src == STORAGE) {
       // TODO
     }
@@ -291,6 +293,11 @@ void ecp(uint8_t *buf) {
         // only copy data
         // does not copy header
         memcpy_b(addr_dest, addr_src, req->length);
+        
+        // if there is a pending evm_memory_copy, resume 
+        if (pending_evm_memory_copy_request.valid) {
+          evm_memory_copy(NULL);
+        }
       } else if (req->dest == HOST) {
         // TODO
       } else {
@@ -505,8 +512,8 @@ void ecp(uint8_t *buf) {
     ECP_OFFSET(buf)->opcode = 0;
   }
 
-  // resume execution
-  if (req->dest != HOST || req->opcode == LOG || req->opcode == DEBUG) {
+  // resume execution                  | only when the evm_memory_copy is finished  
+  if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || req->opcode == LOG) {
 #ifdef SIMULATION
       memcpy(get_output_buffer(), "activate", 8);
       build_outgoing_packet(8);
