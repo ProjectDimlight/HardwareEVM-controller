@@ -85,10 +85,10 @@ void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t d
   if (dirty) {
     buf->func = 1;
     memcpy_b(buf->data, data_source_to_address(src, src_offset), 1024);
-    build_outgoing_packet(sizeof(ECP) + 1024);
+    icm_encrypt(sizeof(ECP) + 1024);
   } else {
     buf->func = 0;
-    build_outgoing_packet(sizeof(ECP) + 0);
+    icm_encrypt(sizeof(ECP) + 0);
   }
 }
 
@@ -169,12 +169,12 @@ void check_debug_buffer() {
   uint16_t target = *debug_counter;
 
   for (; local_debug_counter != target; local_debug_counter++) {
-  // gas8, pc4, stacksize4, gap16, res32
-  for (int i = 0; i < 16; i++)
-    data[i] = debug_buffer_base[(local_debug_counter & 127) * 16 + i];
+    // gas8, pc4, stacksize4, gap16, res32
+    for (int i = 0; i < 16; i++)
+      data[i] = debug_buffer_base[(local_debug_counter & 127) * 16 + i];
 
-  memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
-  build_outgoing_packet(16 + 64);
+    memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+    icm_encrypt(sizeof(ECP) + 64);
   }
 }
 
@@ -182,9 +182,9 @@ void check_debug_buffer() {
 // no longer copy the plaintext into the output buffer
 // but to the ICM_RAW_DATA_BASE for encryption
 void ecp(uint8_t *buf) {
-  uint8_t tmp[16];
-  memcpy(tmp, buf, 16);
-  ECP *req = (ECP*)tmp;
+  uint8_t header[16];
+  memcpy(header, buf, 16);
+  ECP *req = (ECP*)header;
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -230,19 +230,15 @@ void ecp(uint8_t *buf) {
 
   void *addr_src, *addr_dest;
   uint32_t content_length = req->length;
+
+  // first the requests should be sent to encrypted OCM
   if (req->src == HOST)
-    if (req->dest == STORAGE)  // not encrypted
-      addr_src = get_input_buffer() + sizeof(ECP);
-    else // encrypted
-      addr_src = icm_raw_data_base;
+    addr_src = icm_raw_data_base;
   else
     addr_src = data_source_to_address(req->src, req->src_offset);
 
   if (req->dest == HOST)
-    if (req->src == STORAGE)
-      addr_dest = icm_raw_data_base;
-    else
-      addr_dest = get_output_buffer() + sizeof(ECP);
+    addr_dest = icm_raw_data_base;
   else
     addr_dest = data_source_to_address(req->dest, req->dest_offset);
 
@@ -254,6 +250,7 @@ void ecp(uint8_t *buf) {
       // fetch all kv pairs and insert to local storage
       uint32_t* data = (uint32_t*)addr_src;
       uint32_t numItem = data[0], offset = 1;
+
       for (int i = 0; i < numItem; i++, offset += 16) {
         uint32_t index = data[offset] & 0x3f;
         uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
@@ -286,13 +283,21 @@ void ecp(uint8_t *buf) {
     }
     else { // Memory
       if (req->src == HOST) {
-        // update page table
-        uint32_t *pte = data_source_to_pte(req->dest, req->dest_offset);
-        *pte = ((uint32_t)req->dest_offset & page_tagid_mask) | 0x2;
+        if (req->dest != ENV) {
+          // update page table
+          uint32_t *pte = data_source_to_pte(req->dest, req->dest_offset);
+          *pte = ((uint32_t)req->dest_offset & page_tagid_mask) | 0x2;
+        }
 
         // only copy data
         // does not copy header
         memcpy_b(addr_dest, addr_src, req->length);
+
+        /*
+        memcpy(get_output_buffer(), "show", 4);
+        memcpy_b(get_output_buffer() + 4, addr_dest, req->length);
+        build_outgoing_packet(4 + req->length);
+        */
         
         // if there is a pending evm_memory_copy, resume 
         if (pending_evm_memory_copy_request.valid) {
@@ -333,8 +338,8 @@ void ecp(uint8_t *buf) {
 
       // require missing item
       data[offset] = (req->length & 0x2) >> 1;
-      if (data[offset]) {
-        offset++;
+      offset++;
+      if (data[offset-1]) {
         slot = (uint32_t*)(evm_storage_addr + 0xff00);
         for (int i = 0; i < 8; i++)
           data[i + offset] = slot[i];
@@ -382,7 +387,7 @@ void ecp(uint8_t *buf) {
     buf->src_offset = 0;
     buf->dest_offset = 0;
     buf->length = 64 * numItem + 4;
-    build_outgoing_packet(sizeof(ECP) + buf->length);
+    icm_encrypt(sizeof(ECP) + buf->length);
 
     // then pack env variables to the END packet
     // pc, msize, gas
@@ -428,7 +433,7 @@ void ecp(uint8_t *buf) {
     buf->src_offset = 0;
     buf->dest_offset = 0;
     buf->length = 64 * numItem + 4;
-    build_outgoing_packet(sizeof(ECP) + buf->length);
+    icm_encrypt(sizeof(ECP) + buf->length);
 
     // COPY memory
     uint8_t* data8 = (uint8_t*)addr_dest;
@@ -449,7 +454,7 @@ void ecp(uint8_t *buf) {
     buf->src_offset = 0;
     buf->dest_offset = 0;
     buf->length = i;
-    build_outgoing_packet(sizeof(ECP) + buf->length);
+    icm_encrypt(sizeof(ECP) + buf->length);
 
     // COPY stack
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
@@ -472,7 +477,7 @@ void ecp(uint8_t *buf) {
         buf->dest_offset = 0;
         buf->length = 32 * count + 4;
         data[0] = count;
-        build_outgoing_packet(sizeof(ECP) + buf->length);
+        icm_encrypt(sizeof(ECP) + buf->length);
 
         flag = 0;
         count = 0;
@@ -504,7 +509,7 @@ void ecp(uint8_t *buf) {
   // construct header and send
   if (req->dest == HOST) {
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
-    build_outgoing_packet(sizeof(ECP) + content_length);
+    icm_encrypt(sizeof(ECP) + content_length);
   }
 
   // clear local ECP
