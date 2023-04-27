@@ -181,10 +181,13 @@ void check_debug_buffer() {
 // TODO
 // no longer copy the plaintext into the output buffer
 // but to the ICM_RAW_DATA_BASE for encryption
-void ecp(uint8_t *buf) {
-  uint8_t header[16];
-  memcpy(header, buf, 16);
-  ECP *req = (ECP*)header;
+void ecp(uint8_t *in) {
+  ECP header;
+  memcpy(&header, in, 16);
+  ECP *req = &header;
+
+  // clear local ECP
+  ECP_OFFSET(in)->opcode = 0;
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -201,6 +204,8 @@ void ecp(uint8_t *buf) {
       // memory: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(MEM, i << 10);
+
+      clear_storage();
 
       // record status
       evm_active = 1;
@@ -512,11 +517,6 @@ void ecp(uint8_t *buf) {
     icm_encrypt(sizeof(ECP) + content_length);
   }
 
-  // clear local ECP
-  if (buf == (uint8_t*)evm_cout_addr) {
-    ECP_OFFSET(buf)->opcode = 0;
-  }
-
   // resume execution                  | only when the evm_memory_copy is finished  
   if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || req->opcode == LOG) {
 #ifdef SIMULATION
@@ -542,4 +542,6 @@ void clear_storage() {
   uint32_t* slot = (uint32_t*)evm_storage_addr;
   for (uint32_t index = 0; index < 64; index++, slot += 16)
     slot[0] = 0;
+
+  icm_clear_storage();
 }

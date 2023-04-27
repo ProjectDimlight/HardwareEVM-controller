@@ -19,14 +19,27 @@ typedef struct {
   XSecure_Rsa user_pub_inst;
   XSecure_Rsa hevm_priv_inst;
   
-} ICMSecureStorage;
+} ICMConfig;
+
+typedef struct {
+  uint256_t k;
+  uint256_t v;
+} ICMStorageRecord;
+
+typedef struct {
+  ICMStorageRecord  record[1008];
+  uint8_t           padding[12];
+  uint32_t          item_count;
+  uint8_t           valid[1008];
+} ICMTempStorage;
 
 extern void *icm_raw_data_base       ;   // decrypted packet
-extern void *icm_temp_base           ;   // temporary variables
+extern void *icm_temp_storage_base   ;   // temporary storage
 extern void *icm_storage_history_base;   // storage history window for dummy request generation
 extern void *icm_config_base         ;   // system configuration
-extern ICMSecureStorage *icm_config;
 
+void icm_init();
+void icm_clear_storage();
 
 // In real implementation, the AES key should be sent as cipher text
 // and the hevm_priv_key should be generated internally
