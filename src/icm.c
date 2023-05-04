@@ -61,6 +61,22 @@ void icm_init() {
   // icm_set_keys();
 }
 
+// this function is used only when using address-separated storage strategy
+// when using mixed strategy, there will be no swapping-out 
+uint8_t icm_check_signature(rsa2048_t sign_c) {
+  rsa2048_t sign;
+  uint256_t real;
+
+  // decrypt to get the hash (only the first 32 bytes are valid, remaining should be all 0)
+  XSecure_AesEncryptData(&(icm_config->hevm_priv_inst), sign_c, sizeof(rsa2048_t), sign);
+
+  // calculate hash
+  // TODO
+
+  // compare, return 1 if valid
+  return memcmp(real, sign, sizeof(uint256_t)) == 0;
+}
+
 uint8_t icm_decrypt() {
   ECP *req = get_input_buffer();
   

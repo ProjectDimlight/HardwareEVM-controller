@@ -49,11 +49,13 @@ void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa
 // the ECP points to the input buffer where encrypted payload is located at
 // the signature type is adaptive
 // we use merkle proof for storage and RSA-SHA3 signature for others
+// the return value indicates whether the ECP function shoule be called
 uint8_t icm_decrypt();
 
 // the payload should be copied to the secure OCM by the ECP handler
 // which is always located at icm_raw_data_base
 // the encrypted version will be put together with the ECP header in the UDP obuf
+// the length should be the entire length (with the ECP header)
 void icm_encrypt(uint32_t length);
 
 // generates dummy requests for SLOAD to guarantee integrity

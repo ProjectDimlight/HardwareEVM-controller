@@ -205,7 +205,7 @@ void ecp(uint8_t *in) {
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(MEM, i << 10);
 
-      clear_storage();
+      //clear_storage();
 
       // record status
       evm_active = 1;
