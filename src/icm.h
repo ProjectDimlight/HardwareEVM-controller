@@ -11,6 +11,7 @@ typedef uint8_t aes128_t[16];
 
 typedef struct {
   uint256_t block_hash;
+  address_t contract_address;
 
   uint256_t sload_real_key;
 
@@ -24,13 +25,18 @@ typedef struct {
 typedef struct {
   uint256_t k;
   uint256_t v;
+  address_t a;
 } ICMStorageRecord;
 
+const uint32_t storage_record_size = 1 + 20 + 64;
+const uint32_t storage_record_count = 65536 / storage_record_size;
+const uint32_t storage_padding = 65536 % storage_record_size;
+const uint32_t storage_prime = 769;
+
 typedef struct {
-  ICMStorageRecord  record[1008];
-  uint8_t           padding[12];
-  uint32_t          item_count;
-  uint8_t           valid[1008];
+  ICMStorageRecord  record[storage_record_count];
+  uint8_t           padding[storage_padding];
+  uint8_t           valid[storage_record_count];
 } ICMTempStorage;
 
 extern void *icm_raw_data_base       ;   // decrypted packet
