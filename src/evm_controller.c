@@ -288,21 +288,15 @@ void ecp(uint8_t *in) {
     }
     else { // Memory
       if (req->src == HOST) {
+        // only copy data
+        // does not copy header
+        memcpy_b(addr_dest, addr_src, req->length);
+
         if (req->dest != ENV) {
           // update page table
           uint32_t *pte = data_source_to_pte(req->dest, req->dest_offset);
           *pte = ((uint32_t)req->dest_offset & page_tagid_mask) | 0x2;
         }
-
-        // only copy data
-        // does not copy header
-        memcpy_b(addr_dest, addr_src, req->length);
-
-        /*
-        memcpy(get_output_buffer(), "show", 4);
-        memcpy_b(get_output_buffer() + 4, addr_dest, req->length);
-        build_outgoing_packet(4 + req->length);
-        */
         
         // if there is a pending evm_memory_copy, resume 
         if (pending_evm_memory_copy_request.valid) {

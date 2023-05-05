@@ -39,10 +39,12 @@ typedef struct {
   uint8_t           valid[storage_record_count];
 } ICMTempStorage;
 
-extern void *icm_raw_data_base       ;   // decrypted packet
-extern void *icm_temp_storage_base   ;   // temporary storage
-extern void *icm_storage_history_base;   // storage history window for dummy request generation
-extern void *icm_config_base         ;   // system configuration
+extern void *icm_raw_data_base         ;   // decrypted packet
+extern void *icm_temp_storage_base     ;   // temporary storage
+extern void *icm_storage_history_base  ;   // storage history window for dummy request generation
+extern void *icm_config_base           ;   // system configuration
+extern ICMTempStorage *icm_temp_storage;
+extern ICMConfig      *icm_config      ;
 
 void icm_init();
 void icm_clear_storage();
