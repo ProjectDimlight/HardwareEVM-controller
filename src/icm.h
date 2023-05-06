@@ -28,10 +28,10 @@ typedef struct {
   address_t a;
 } ICMStorageRecord;
 
-const uint32_t storage_record_size = 1 + 20 + 64;
-const uint32_t storage_record_count = 65536 / storage_record_size;
-const uint32_t storage_padding = 65536 % storage_record_size;
-const uint32_t storage_prime = 769;
+#define storage_record_size 85
+#define storage_record_count 771
+#define storage_padding 1
+#define storage_prime 769
 
 typedef struct {
   ICMStorageRecord  record[storage_record_count];

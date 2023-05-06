@@ -36,7 +36,7 @@ uint32_t icm_find(uint256_t key) {
   for (;
       cnt < storage_prime &&
       icm_temp_storage->valid[hash] && (
-      memcmp(icm_temp_storage->record[hash].a, cm_config->contract_address, sizeof(address_t)) != 0 ||
+      memcmp(icm_temp_storage->record[hash].a, icm_config->contract_address, sizeof(address_t)) != 0 ||
       memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
     hash = (hash + 1) % storage_prime, cnt++);
 
@@ -64,7 +64,6 @@ void icm_init() {
 }
 
 void icm_clear_storage() {
-  icm_temp_storage->item_count = 0;
   memset(icm_temp_storage->valid, 0, sizeof(icm_temp_storage->valid));
 }
 
@@ -96,6 +95,9 @@ uint8_t icm_decrypt() {
   } else {
     uint8_t *signature = req->data + req->length;
     if (req->src == STORAGE) { // this request is sent from host
+      ECP *res = get_output_buffer();
+      memcpy(res, req, sizeof(ECP));
+
       // copy from OCM to HOST
       uint64_t count = 0, content_length = 4;
       for (uint64_t i = 0; i < storage_prime; i++)
@@ -104,11 +106,11 @@ uint8_t icm_decrypt() {
         count++; content_length += 84;
         
         if (count == 16) {
-          req->length = content_length;
-          *(uint32_t*)req->data = count;
+          res->length = content_length;
+          *(uint32_t*)res->data = count;
 #ifdef ENCRYPTION 
 #else
-          memcpy(req->data + 4, icm_raw_data_base + 4, content_length - 4);
+          memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
 #endif
           build_outgoing_packet(content_length + sizeof(ECP));
           count = 0, content_length = 4;
@@ -116,11 +118,11 @@ uint8_t icm_decrypt() {
       }
       // finalize: send remaining records
       if (count != 0) {
-        req->length = content_length;
-        *(uint32_t*)req->data = count;
+        res->length = content_length;
+        *(uint32_t*)res->data = count;
 #ifdef ENCRYPTION 
 #else
-          memcpy(req->data + 4, icm_raw_data_base + 4, content_length - 4);
+          memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
 #endif
         build_outgoing_packet(content_length + sizeof(ECP));
       }
@@ -191,7 +193,7 @@ void icm_encrypt(uint32_t length) {
           memcpy(&(icm_temp_storage->record[id].a), icm_config->contract_address, sizeof(address_t));
         }
         // nothing to be sent out
-        return 0;
+        return;
       } else {  // req->opcode == SWAP
         void *base = icm_raw_data_base;
 
@@ -207,7 +209,7 @@ void icm_encrypt(uint32_t length) {
 
           // OCM need not encryption
           icm_temp_storage->valid[id] = 1;
-          memcpy(&(icm_temp_storage->record[id]), base + offset, 64);
+          memcpy(&(icm_temp_storage->record[id]), base, 64);
           // also, copy the address of the current contract
           memcpy(&(icm_temp_storage->record[id].a), icm_config->contract_address, sizeof(address_t));
 
@@ -239,11 +241,12 @@ void icm_encrypt(uint32_t length) {
         // since the swapped-out record has been saved in phase 0
         // we are not sending it again, instead set the output num_of_items to 0
         *(uint32_t*)req->data = 0;
-        req->length = 8 + 64;
+        *(uint32_t*)(req->data + 4) = 1;
+        req->length = 8 + 32;
 #ifdef ENCRYPTION
         // send dummy requests 
 #else
-        memcpy(req->data + 4, base, 4 + 64);
+        memcpy(req->data + 8, base + 4, 32);
 #endif
         build_outgoing_packet(sizeof(ECP) + req->length);
       }

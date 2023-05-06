@@ -57,7 +57,7 @@ uint8_t *check_incoming_packet() {
 	// now the packet is in the input buffer, but encrypted
 	// decrypt the payloads to secure memory
 	// and set input_valid only after the signature is checked
-	return input_valid && icm_decrypt() ? (input_valid = 0, buf_in) : NULL;
+	return input_valid && icm_decrypt() ? (input_valid = 0, buf_in) : (input_valid = 0, NULL);
 }
 
 void build_outgoing_packet(uint32_t len) {

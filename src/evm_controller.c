@@ -327,7 +327,7 @@ void ecp(uint8_t *in) {
       uint32_t offset = 1;
       // copy out if valid
       if ((slot[0] & 0x1) == 0x1) {
-      {
+        data[0] = 1;
         // copy out to OCM if valid for better performance
         // regardless of whether it is dirty
         for (int i = 0; i < 16; i++)
@@ -339,15 +339,13 @@ void ecp(uint8_t *in) {
       }
 
       // require missing item
-      data[offset] = (req->length & 0x2) >> 1;
+      data[offset] = 1;
       offset++;
-      if (data[offset-1]) {
-        slot = (uint32_t*)(evm_storage_addr + 0xff00);
-        for (int i = 0; i < 8; i++)
-          data[i + offset] = slot[i];
-        data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
-        offset += 8;
-      }
+      slot = (uint32_t*)(evm_storage_addr + 0xff00);
+      for (int i = 0; i < 8; i++)
+        data[i + offset] = slot[i];
+      data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
+      offset += 8;
       content_length = offset * 4;
     }
     else { // swap memory

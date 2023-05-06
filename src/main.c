@@ -11,6 +11,7 @@ int main(void)
   start_application();
   
   icm_init();
+  icm_clear_storage();
 
   // wait for a host
   // after receiving any packet, it will memorize the socket
