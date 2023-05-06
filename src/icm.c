@@ -95,7 +95,7 @@ uint8_t icm_decrypt() {
     return 1;
   } else {
     uint8_t *signature = req->data + req->length;
-    if (req->src == STORAGE) { // sent from host
+    if (req->src == STORAGE) { // this request is sent from host
       // copy from OCM to HOST
       uint64_t count = 0, content_length = 4;
       for (uint64_t i = 0; i < storage_prime; i++)

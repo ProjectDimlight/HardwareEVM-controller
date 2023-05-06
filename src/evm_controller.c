@@ -325,8 +325,11 @@ void ecp(uint8_t *in) {
 
       // commit dirty item
       uint32_t offset = 1;
-      data[0] = req->length & 0x1;		// dirty bit
-      if (data[0]) {
+      // copy out if valid
+      if ((slot[0] & 0x1) == 0x1) {
+      {
+        // copy out to OCM if valid for better performance
+        // regardless of whether it is dirty
         for (int i = 0; i < 16; i++)
           data[i + 1] = slot[i];
         uint32_t tmp = data[1] & 0xffffffc0;
@@ -369,8 +372,8 @@ void ecp(uint8_t *in) {
     uint32_t* data = (uint32_t*)addr_dest;
     uint32_t* slot = (uint32_t*)(evm_storage_addr);
     for (uint32_t index = 0; index < 64; index++, slot += 16)
-      // valid and dirty: copy back
-      if ((slot[0] & 0x3) == 0x3) {
+      // copy out if valid
+      if ((slot[0] & 0x1) == 0x1) {
         data[offset] = (slot[0] & 0xffffffc0) + index;
         for (int i = 1; i < 16; i++)
           data[offset + i] = slot[i];
@@ -417,8 +420,8 @@ void ecp(uint8_t *in) {
     uint32_t* data = (uint32_t*)addr_dest;
     uint32_t* slot = (uint32_t*)(evm_storage_addr);
     for (uint32_t index = 0; index < 64; index++, slot += 16)
-      // valid and dirty: copy back
-      if ((slot[0] & 0x3) == 0x3) {
+      // copy out if valid
+      if ((slot[0] & 0x1) == 0x1) {
         data[offset] = (slot[0] & 0xffffffc0) + index;
         for (int i = 1; i < 16; i++)
           data[offset + i] = slot[i];
