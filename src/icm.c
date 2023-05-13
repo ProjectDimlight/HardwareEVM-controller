@@ -5,7 +5,7 @@
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 
-// #define ENCRYPTION
+#define ENCRYPTION
 
 // these address spaces are mapped to secure on chip memory
 void *icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
@@ -46,21 +46,28 @@ uint32_t icm_find(uint256_t key) {
     return hash;
 }
 
-// decrypt = private key
-// encrypt = public key
+///////////////////////////////////////////////////////////////////
 
-void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_mod) {
+uint32_t padded_size(uint32_t size, uint32_t block_size) {
+  uint32_t number_of_blocks = ((size - 1) / block_size + 1);
+  return number_of_blocks * block_size;
+}
+
+///////////////////////////////////////////////////////////////////
+
+void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod) {
   XCsuDma_Config *config = XCsuDma_LookupConfig(XSECURE_CSUDMA_DEVICEID);
   XCsuDma_CfgInitialize(&(icm_config->csu_dma_instance), config, config->BaseAddress);
   uint32_t iv[16] = {0};
 
   XSecure_AesInitialize(&(icm_config->user_aes_inst), &(icm_config->csu_dma_instance), XSECURE_CSU_AES_KEY_SRC_KUP, iv, (uint32_t*)user_aes);
   XSecure_RsaInitialize(&(icm_config->user_pub_inst), user_mod, NULL, user_pub);
+  XSecure_RsaInitialize(&(icm_config->hevm_pub_inst), hevm_mod, NULL, hevm_pub);
   XSecure_RsaInitialize(&(icm_config->hevm_priv_inst), hevm_mod, NULL, hevm_priv);
 }
 
 void icm_init() {
-  icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_mod);
+  icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
 }
 
 void icm_clear_storage() {
@@ -73,8 +80,9 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
   rsa2048_t sign;
   uint256_t real;
 
-  // decrypt to get the hash (only the first 32 bytes are valid, remaining should be all 0)
-  XSecure_AesEncryptData(&(icm_config->hevm_priv_inst), sign_c, sizeof(rsa2048_t), sign);
+  // decrypt by the public key to get the hash 
+  // only the first 32 bytes are valid, remaining should be all 0
+  XSecure_RsaPrivateDecrypt(&(icm_config->hevm__inst), sign_c, XSECURE_RSA_2048_KEY_SIZE, sign);
 
   // calculate hash
   // TODO
@@ -83,14 +91,35 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
   return memcmp(real, sign, sizeof(uint256_t)) == 0;
 }
 
+///////////////////////////////////////////////////////////////////
+
+void icm_generate_dummy_requests() {
+  
+}
+
+void icm_record_history() {
+  
+}
+
 uint8_t icm_decrypt() {
   ECP *req = get_input_buffer();
   
   if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     return 1;
-  } else if (req->opcode == CALL) { // memorize the contract address
+  } else if (req->opcode == CALL) {
+    // memorize the contract address
     memcpy(icm_config->contract_address, req->data, sizeof(address_t));
+
+    // TODO
+    // check integrity, return 0 if failed, and the tx will not run
+
+    // check stack hash
+    // if res->func == 0 (start anew), the stack must be empty
+    // if res->func == 1 (resume from call), the hash of the contents must match
+
+    // check merkle proof of ENV values
+
     return 1;
   } else {
     uint8_t *signature = req->data + req->length;
@@ -104,26 +133,25 @@ uint8_t icm_decrypt() {
       if (icm_temp_storage->valid[i]) {
         memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), 84);
         count++; content_length += 84;
-        
-        if (count == 16) {
-          res->length = content_length;
-          *(uint32_t*)res->data = count;
-#ifdef ENCRYPTION 
-#else
-          memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
-#endif
-          build_outgoing_packet(content_length + sizeof(ECP));
-          count = 0, content_length = 4;
-        }
       }
       // finalize: send remaining records
-      if (count != 0) {
+      // even if there are no more records, we still have to send out a request
+      // with res->func set to 1, indicating the end
+      // if (count != 0) {
+      {
+        res->func = 1;
         res->length = content_length;
         *(uint32_t*)res->data = count;
 #ifdef ENCRYPTION 
+        uint32_t pad = padded_size(content_length - 4, sizeof(aes128_t));
+        XSecure_AesEncryptData(&(icm_config->user_aes_inst), res->data + 4, icm_raw_data_base + 4, pad);
+        content_length = 4 + pad + 16;
 #else
-          memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
+        memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
 #endif
+
+        // TODO: Add Signature
+
         build_outgoing_packet(content_length + sizeof(ECP));
       }
       return 0;
@@ -144,22 +172,37 @@ uint8_t icm_decrypt() {
       // plaintext need not decrypt
       memcpy(icm_raw_data_base, req->data, req->length);
       return 1;
-    } else {
+    } else {  // memory like
 #ifdef ENCRYPTION
-      XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, NULL);
+      // the size of memory pages and stack elements are always multiples of 16
+      // so there is no need to pad content_length
+      if (req->dest == STACK) {
+        // there is a 4-byte "num_of_items" field before stack elements
+        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base + 4, req->data + 4, req->length - 4, req->data + req->length);
+        *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
+
+        // do not check signature here
+      } else if (req->dest == MEM && req->func == 1) {
+        // a blank page
+        memset(icm_raw_data_base, 0, 1024);
+      } else {
+        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, req->data + req->length);
+      }
 #else
       memcpy(icm_raw_data_base, req->data, req->length);
 #endif
-      /*
+
       memcpy(get_output_buffer(), "echo", 4);
-      memcpy(get_output_buffer() + 4, req, sizeof(ECP) + req->length);
-      build_outgoing_packet(4 + sizeof(ECP) + req->length);
-      */
+      memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
+      build_outgoing_packet(4 + req->length);
 
       // check RSA signature
-      // TODO
-      // XSecure_RsaPublicEncrypt(rsa_user_inst, sign_c, XSECURE_RSA_2048_KEY_SIZE, icm_temp_base);
-
+      /*
+      if (req->dest != STACK) {
+        XSecure_RsaPrivateDecrypt(rsa_user_inst, sign_c, XSECURE_RSA_2048_KEY_SIZE, icm_temp_base);
+      }
+      */
+      
       return 1;
     }
   }
@@ -175,7 +218,7 @@ void icm_encrypt(uint32_t length) {
   } else {
     if (req->src == STORAGE) {
       if (req->opcode == COPY) {
-        // copy from HEVM to OCM
+        // copy plaintext storage from HEVM to OCM
         void *base = icm_raw_data_base;
         uint32_t num_of_items = *(uint32_t*)base;
         uint32_t offset = 4;
@@ -243,19 +286,36 @@ void icm_encrypt(uint32_t length) {
         *(uint32_t*)req->data = 0;
         *(uint32_t*)(req->data + 4) = 1;
         req->length = 8 + 32;
+        content_length = 8 + 32;
+
 #ifdef ENCRYPTION
-        // send dummy requests 
+        // send dummy requests
+        // TODO
+
+        memcpy(req->data + 8, base + 4, 32);
+        build_outgoing_packet(sizeof(ECP) + content_length);
 #else
         memcpy(req->data + 8, base + 4, 32);
+        build_outgoing_packet(sizeof(ECP) + content_length);
 #endif
-        build_outgoing_packet(sizeof(ECP) + req->length);
       }
     }
     else {
       // memory-like
 
 #ifdef ENCRYPTION
-      XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data, icm_raw_data_base, length);
+      if (req->src == STACK) {
+        if (req->func == 1) {
+          // plaintext
+          memcpy(req->data, icm_raw_data_base, content_length);
+        } else {
+          XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data + 4, icm_raw_data_base + 4, content_length - 4);
+          *(uint32_t*)req->data = *(uint32_t*)icm_raw_data_base;
+        }
+      } else {
+        XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data, icm_raw_data_base, content_length);
+      }
+      content_length += 16;
 #else
       memcpy(req->data, icm_raw_data_base, content_length);
 #endif
@@ -263,15 +323,7 @@ void icm_encrypt(uint32_t length) {
       // build RSA signature
       // TODO
 
-      build_outgoing_packet(length);
+      build_outgoing_packet(sizeof(ECP) + content_length);
     }
   }
-}
-
-void icm_generate_dummy_requests() {
-  
-}
-
-void icm_record_history() {
-  
 }

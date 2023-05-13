@@ -39,8 +39,8 @@ static struct udp_pcb *tpcb;
 static ip_addr_t taddr;
 static u16_t tport;
 
-uint8_t buf_in[4096];
-uint8_t buf_out[4096];
+uint8_t buf_in[65536];
+uint8_t buf_out[65536];
 uint32_t input_size;
 uint8_t input_valid;
 

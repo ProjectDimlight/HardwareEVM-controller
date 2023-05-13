@@ -12,6 +12,14 @@ void *memcpy_b(void *dst0, void *src0, uint32_t len0)
   return dst0;
 }
 
+void *memset_b(void *dst0, uint8_t val, uint32_t len0)
+{
+  char *dst = dst0;
+  while (len0--)
+    *dst++ = val;
+  return dst0;
+}
+
 // EVM hardware addressing
 // 0x10000000: control(input) "call"
 // 0x10000004: control(input) "ready" (evm stop stalling)
@@ -40,6 +48,8 @@ const uint64_t page_id_mask		  = 0xc00;
 const uint64_t page_idof_mask	  = 0xfff;
 const uint64_t page_of_mask		  = 0x3ff;
 const uint64_t page_size 		    = 0x400;
+
+const uint32_t num_of_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
 
 int evm_active = 0;
 
@@ -443,20 +453,26 @@ void ecp(uint8_t *in) {
     uint8_t* pc = env + 32 * 15;
     uint8_t* msize = env + 32 * 9;
     uint8_t* gas = env + 32 * 10;
+    
+    for (int i = 0; i < NUMBER_OF_PAGES; i++) {
+      uint32_t pte = *data_source_to_pte(MEM, i << 10);
+      if ((pte & 2) == 0)  // empty
+        continue;
 
-    uint32_t i;
-    memcpy_b(&i,  msize, 4);
-    memcpy_b(data8, memory, i);
-
-    buf->opcode = COPY;
-    buf->src = MEM;
-    buf->dest = HOST;
-    buf->src_offset = 0;
-    buf->dest_offset = 0;
-    buf->length = i;
-    icm_encrypt(sizeof(ECP) + buf->length);
+      buf->opcode = COPY;
+      buf->src = MEM;
+      buf->dest = HOST;
+      buf->src_offset = pte & page_tagid_mask;
+      buf->dest_offset = 0;
+      buf->length = 1024;
+      memcpy_b(data8, memory + (i << 10), 1024);
+      icm_encrypt(sizeof(ECP) + buf->length);
+    }
 
     // COPY stack
+    // the call params should remain as plaintext
+    uint32_t num_of_call_params = num_of_params[req->func & 0xf]; 
+
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
     numItem = *stackSize;
@@ -468,7 +484,7 @@ void ecp(uint8_t *in) {
       // then pop
       *stackOp = 0;
       count ++;
-      if (count == 32 || i == 1) {
+      if (flag && count == num_of_call_params || i == 1) {
         buf->opcode = COPY;
         buf->src = STACK;
         buf->dest = HOST;

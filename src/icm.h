@@ -18,6 +18,7 @@ typedef struct {
   XCsuDma     csu_dma_instance;
   XSecure_Aes user_aes_inst;
   XSecure_Rsa user_pub_inst;
+  XSecure_Rsa hevm_pub_inst;
   XSecure_Rsa hevm_priv_inst;
   
 } ICMConfig;
@@ -52,7 +53,7 @@ void icm_clear_storage();
 // In real implementation, the AES key should be sent as cipher text
 // and the hevm_priv_key should be generated internally
 // here we just use it as plain text and copy it to the secure memory
-void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_mod);
+void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod);
 
 // the ECP points to the input buffer where encrypted payload is located at
 // the signature type is adaptive
@@ -65,7 +66,3 @@ uint8_t icm_decrypt();
 // the encrypted version will be put together with the ECP header in the UDP obuf
 // the length should be the entire length (with the ECP header)
 void icm_encrypt(uint32_t length);
-
-// generates dummy requests for SLOAD to guarantee integrity
-// TODO: design protection for SSTORE
-void icm_generate_dummy_requests();
