@@ -5,7 +5,7 @@
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 
-#define ENCRYPTION
+// #define ENCRYPTION
 
 // these address spaces are mapped to secure on chip memory
 void *icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
@@ -55,6 +55,7 @@ uint32_t padded_size(uint32_t size, uint32_t block_size) {
 
 ///////////////////////////////////////////////////////////////////
 
+/*
 void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod) {
   XCsuDma_Config *config = XCsuDma_LookupConfig(XSECURE_CSUDMA_DEVICEID);
   XCsuDma_CfgInitialize(&(icm_config->csu_dma_instance), config, config->BaseAddress);
@@ -65,9 +66,16 @@ void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa
   XSecure_RsaInitialize(&(icm_config->hevm_pub_inst), hevm_mod, NULL, hevm_pub);
   XSecure_RsaInitialize(&(icm_config->hevm_priv_inst), hevm_mod, NULL, hevm_priv);
 }
+*/
 
 void icm_init() {
-  icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
+  XCsuDma_Config *config = XCsuDma_LookupConfig(XSECURE_CSUDMA_DEVICEID);
+  XCsuDma_CfgInitialize(&(icm_config->csu_dma_instance), config, config->BaseAddress);
+  uint32_t iv[16] = {0};
+
+  XSecure_AesInitialize(&(icm_config->user_aes_inst), &(icm_config->csu_dma_instance), XSECURE_CSU_AES_KEY_SRC_KUP, iv, (uint32_t*)user_aes);
+
+  // icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
 }
 
 void icm_clear_storage() {
@@ -82,7 +90,7 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
 
   // decrypt by the public key to get the hash 
   // only the first 32 bytes are valid, remaining should be all 0
-  XSecure_RsaPrivateDecrypt(&(icm_config->hevm__inst), sign_c, XSECURE_RSA_2048_KEY_SIZE, sign);
+  // XSecure_RsaPrivateDecrypt(&(icm_config->hevm_pub_inst), sign_c, XSECURE_RSA_2048_KEY_SIZE, sign);
 
   // calculate hash
   // TODO
@@ -188,13 +196,14 @@ uint8_t icm_decrypt() {
       } else {
         XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, req->data + req->length);
       }
-#else
-      memcpy(icm_raw_data_base, req->data, req->length);
-#endif
-
+      
       memcpy(get_output_buffer(), "echo", 4);
       memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
       build_outgoing_packet(4 + req->length);
+
+#else
+      memcpy(icm_raw_data_base, req->data, req->length);
+#endif
 
       // check RSA signature
       /*

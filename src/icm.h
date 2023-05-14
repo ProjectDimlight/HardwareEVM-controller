@@ -53,7 +53,7 @@ void icm_clear_storage();
 // In real implementation, the AES key should be sent as cipher text
 // and the hevm_priv_key should be generated internally
 // here we just use it as plain text and copy it to the secure memory
-void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod);
+// void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod);
 
 // the ECP points to the input buffer where encrypted payload is located at
 // the signature type is adaptive
