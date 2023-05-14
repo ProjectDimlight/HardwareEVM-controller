@@ -15,12 +15,7 @@ typedef struct {
 
   uint256_t sload_real_key;
 
-  XCsuDma     csu_dma_instance;
-  XSecure_Aes user_aes_inst;
-  XSecure_Rsa user_pub_inst;
-  XSecure_Rsa hevm_pub_inst;
-  XSecure_Rsa hevm_priv_inst;
-  
+  struct AES_ctx aes_inst;
 } ICMConfig;
 
 typedef struct {

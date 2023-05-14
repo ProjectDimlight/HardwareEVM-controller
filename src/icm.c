@@ -48,27 +48,37 @@ uint32_t icm_find(uint256_t key) {
 
 ///////////////////////////////////////////////////////////////////
 
+const uint8_t iv[16] = {0};
+
 uint32_t padded_size(uint32_t size, uint32_t block_size) {
   uint32_t number_of_blocks = ((size - 1) / block_size + 1);
   return number_of_blocks * block_size;
 }
 
-///////////////////////////////////////////////////////////////////
-
 void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod) {
-  XCsuDma_Config *config = XCsuDma_LookupConfig(XSECURE_CSUDMA_DEVICEID);
-  XCsuDma_CfgInitialize(&(icm_config->csu_dma_instance), config, config->BaseAddress);
-  uint32_t iv[16] = {0};
-
-  XSecure_AesInitialize(&(icm_config->user_aes_inst), &(icm_config->csu_dma_instance), XSECURE_CSU_AES_KEY_SRC_KUP, iv, (uint32_t*)user_aes);
-  XSecure_RsaInitialize(&(icm_config->user_pub_inst), user_mod, NULL, user_pub);
-  XSecure_RsaInitialize(&(icm_config->hevm_pub_inst), hevm_mod, NULL, hevm_pub);
-  XSecure_RsaInitialize(&(icm_config->hevm_priv_inst), hevm_mod, NULL, hevm_priv);
+  AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
 }
 
 void icm_init() {
   icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
 }
+
+void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  memcpy(out, in, size);
+  size = padded_size(size, 16);
+  AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
+}
+
+uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  size = padded_size(size, 16);
+  AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
+  memcpy(out, in, size);
+  return size;
+}
+
+///////////////////////////////////////////////////////////////////
 
 void icm_clear_storage() {
   memset(icm_temp_storage->valid, 0, sizeof(icm_temp_storage->valid));
@@ -82,7 +92,7 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
 
   // decrypt by the public key to get the hash 
   // only the first 32 bytes are valid, remaining should be all 0
-  XSecure_RsaPrivateDecrypt(&(icm_config->hevm__inst), sign_c, XSECURE_RSA_2048_KEY_SIZE, sign);
+  // TODO
 
   // calculate hash
   // TODO
@@ -143,9 +153,7 @@ uint8_t icm_decrypt() {
         res->length = content_length;
         *(uint32_t*)res->data = count;
 #ifdef ENCRYPTION 
-        uint32_t pad = padded_size(content_length - 4, sizeof(aes128_t));
-        XSecure_AesEncryptData(&(icm_config->user_aes_inst), res->data + 4, icm_raw_data_base + 4, pad);
-        content_length = 4 + pad + 16;
+        content_length = 4 + aes_encrypt(res->data + 4, icm_raw_data_base + 4, content_length - 4);
 #else
         memcpy(res->data + 4, icm_raw_data_base + 4, content_length - 4);
 #endif
@@ -178,7 +186,7 @@ uint8_t icm_decrypt() {
       // so there is no need to pad content_length
       if (req->dest == STACK) {
         // there is a 4-byte "num_of_items" field before stack elements
-        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base + 4, req->data + 4, req->length - 4, req->data + req->length);
+        aes_decrypt(icm_raw_data_base + 4, req->data + 4, req->length - 4);
         *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
 
         // do not check signature here
@@ -186,7 +194,7 @@ uint8_t icm_decrypt() {
         // a blank page
         memset(icm_raw_data_base, 0, 1024);
       } else {
-        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, req->data + req->length);
+        aes_decrypt(icm_raw_data_base, req->data, req->length);
       }
 #else
       memcpy(icm_raw_data_base, req->data, req->length);
@@ -199,7 +207,7 @@ uint8_t icm_decrypt() {
       // check RSA signature
       /*
       if (req->dest != STACK) {
-        XSecure_RsaPrivateDecrypt(rsa_user_inst, sign_c, XSECURE_RSA_2048_KEY_SIZE, icm_temp_base);
+        
       }
       */
       
@@ -309,13 +317,12 @@ void icm_encrypt(uint32_t length) {
           // plaintext
           memcpy(req->data, icm_raw_data_base, content_length);
         } else {
-          XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data + 4, icm_raw_data_base + 4, content_length - 4);
+          content_length = 4 + aes_encrypt(req->data + 4, icm_raw_data_base + 4, content_length - 4);
           *(uint32_t*)req->data = *(uint32_t*)icm_raw_data_base;
         }
       } else {
-        XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data, icm_raw_data_base, content_length);
+        content_length = aes_encrypt(req->data, icm_raw_data_base, content_length);
       }
-      content_length += 16;
 #else
       memcpy(req->data, icm_raw_data_base, content_length);
 #endif
