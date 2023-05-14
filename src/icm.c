@@ -5,7 +5,7 @@
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 
-// #define ENCRYPTION
+#define ENCRYPTION
 
 // these address spaces are mapped to secure on chip memory
 void *icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
@@ -71,8 +71,7 @@ void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa
 void icm_init() {
   XCsuDma_Config *config = XCsuDma_LookupConfig(XSECURE_CSUDMA_DEVICEID);
   XCsuDma_CfgInitialize(&(icm_config->csu_dma_instance), config, config->BaseAddress);
-  uint32_t iv[16] = {0};
-
+  uint8_t iv[16] = {0};
   XSecure_AesInitialize(&(icm_config->user_aes_inst), &(icm_config->csu_dma_instance), XSECURE_CSU_AES_KEY_SRC_KUP, iv, (uint32_t*)user_aes);
 
   // icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
@@ -128,6 +127,8 @@ uint8_t icm_decrypt() {
 
     // check merkle proof of ENV values
 
+    return 1;
+  } else if (req->opcode == END) {
     return 1;
   } else {
     uint8_t *signature = req->data + req->length;
@@ -186,21 +187,31 @@ uint8_t icm_decrypt() {
       // so there is no need to pad content_length
       if (req->dest == STACK) {
         // there is a 4-byte "num_of_items" field before stack elements
-        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base + 4, req->data + 4, req->length - 4, req->data + req->length);
+        if (req->length > 4)
+          XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base + 4, req->data + 4, req->length - 4, req->data + req->length);
         *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
 
         // do not check signature here
       } else if (req->dest == MEM && req->func == 1) {
         // a blank page
         memset(icm_raw_data_base, 0, 1024);
+      } else if (req->dest == ENV) {
+        memcpy(icm_raw_data_base, req->data, req->length);
       } else {
-        XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, req->data + req->length);
+        if (req->length > 0) {
+          //XSecure_AesDecryptData(&(icm_config->user_aes_inst), icm_raw_data_base, req->data, req->length, req->data + req->length);
+          XSecure_AesDecryptInit(&(icm_config->user_aes_inst), icm_raw_data_base, req->length - 16, req->data + req->length - 16);
+          int res = XSecure_AesDecryptUpdate(&(icm_config->user_aes_inst), req->data, req->length - 16);
+
+          memcpy(get_output_buffer(), "res=", 4);
+          memcpy(get_output_buffer() + 4, &res, 4);
+          build_outgoing_packet(4 + 4);
+        }
       }
-      
+
       memcpy(get_output_buffer(), "echo", 4);
       memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
       build_outgoing_packet(4 + req->length);
-
 #else
       memcpy(icm_raw_data_base, req->data, req->length);
 #endif
@@ -224,6 +235,9 @@ void icm_encrypt(uint32_t length) {
   if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     build_outgoing_packet(length);
+  } else if (req->opcode == QUERY || req->opcode == CALL || req->opcode == END) {
+    memcpy(req->data, icm_raw_data_base, content_length);
+    build_outgoing_packet(sizeof(ECP) + content_length);
   } else {
     if (req->src == STORAGE) {
       if (req->opcode == COPY) {
@@ -318,11 +332,13 @@ void icm_encrypt(uint32_t length) {
           // plaintext
           memcpy(req->data, icm_raw_data_base, content_length);
         } else {
-          XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data + 4, icm_raw_data_base + 4, content_length - 4);
+          if (content_length > 4) 
+            XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data + 4, icm_raw_data_base + 4, content_length - 4);
           *(uint32_t*)req->data = *(uint32_t*)icm_raw_data_base;
         }
       } else {
-        XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data, icm_raw_data_base, content_length);
+        if (content_length > 0)
+          XSecure_AesEncryptData(&(icm_config->user_aes_inst), req->data, icm_raw_data_base, content_length);
       }
       content_length += 16;
 #else
