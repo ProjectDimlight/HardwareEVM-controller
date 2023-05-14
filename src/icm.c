@@ -131,6 +131,8 @@ uint8_t icm_decrypt() {
     // check merkle proof of ENV values
 
     return 1;
+  } else if (req->opcode == END) {
+    return 1;
   } else {
     uint8_t *signature = req->data + req->length;
     if (req->src == STORAGE) { // this request is sent from host
@@ -193,16 +195,18 @@ uint8_t icm_decrypt() {
       } else if (req->dest == MEM && req->func == 1) {
         // a blank page
         memset(icm_raw_data_base, 0, 1024);
+      } else if (req->dest == ENV) {
+        memcpy(icm_raw_data_base, req->data, req->length);
       } else {
         aes_decrypt(icm_raw_data_base, req->data, req->length);
       }
-#else
-      memcpy(icm_raw_data_base, req->data, req->length);
-#endif
 
       memcpy(get_output_buffer(), "echo", 4);
       memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
       build_outgoing_packet(4 + req->length);
+#else
+      memcpy(icm_raw_data_base, req->data, req->length);
+#endif
 
       // check RSA signature
       /*
@@ -223,6 +227,9 @@ void icm_encrypt(uint32_t length) {
   if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     build_outgoing_packet(length);
+  } else if (req->opcode == QUERY || req->opcode == CALL || req->opcode == END) {
+    memcpy(req->data, icm_raw_data_base, content_length);
+    build_outgoing_packet(sizeof(ECP) + content_length);
   } else {
     if (req->src == STORAGE) {
       if (req->opcode == COPY) {

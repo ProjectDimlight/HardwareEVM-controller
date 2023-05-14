@@ -215,7 +215,7 @@ void ecp(uint8_t *in) {
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(MEM, i << 10);
 
-      //clear_storage();
+      clear_storage();
 
       // record status
       evm_active = 1;
@@ -344,8 +344,10 @@ void ecp(uint8_t *in) {
           data[i + 1] = slot[i];
         uint32_t tmp = data[1] & 0xffffffc0;
         data[1] = tmp | (req->src_offset >> 6);
-        slot[0] = slot[0] ^ 0x10;  		// clean dirty bit
+        slot[0] = slot[0] & ~0x3;  		// clean dirty bit
         offset += 16;
+      } else {
+        data[0] = 0;
       }
 
       // require missing item
@@ -553,6 +555,4 @@ void clear_storage() {
   uint32_t* slot = (uint32_t*)evm_storage_addr;
   for (uint32_t index = 0; index < 64; index++, slot += 16)
     slot[0] = 0;
-
-  icm_clear_storage();
 }
