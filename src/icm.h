@@ -1,6 +1,7 @@
 // This is the integrity and confidentiality manager
 // which will be called by the udp_server
 
+#include "aes.h"
 #include "evm_controller.h"
 #include "xsecure.h"
 

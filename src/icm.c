@@ -55,15 +55,18 @@ uint32_t padded_size(uint32_t size, uint32_t block_size) {
   return number_of_blocks * block_size;
 }
 
+/*
 void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa2048_t hevm_priv, rsa2048_t hevm_pub, rsa2048_t hevm_mod) {
   AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
 }
+*/
 
 void icm_init() {
   pending_icm_slice_request.valid = false;
   pending_icm_slice_request.head = icm_raw_data_base;
 
-  icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
+  // icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
+  AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
 }
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
@@ -259,7 +262,7 @@ uint8_t icm_decrypt() {
 
         // TODO: Add Signature
 
-        build_outgoing_packet(content_length + sizeof(ECP));
+        build_outgoing_packet(sizeof(ECP) + content_length);
       }
       return 0;
     } else if (req->dest == STORAGE) {
