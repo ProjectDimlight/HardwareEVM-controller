@@ -49,7 +49,8 @@ const uint64_t page_idof_mask	  = 0xfff;
 const uint64_t page_of_mask		  = 0x3ff;
 const uint64_t page_size 		    = 0x400;
 
-const uint32_t num_of_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
+const uint32_t num_of_call_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
+
 
 int evm_active = 0;
 
@@ -398,7 +399,7 @@ void ecp(uint8_t *in) {
     buf->dest_offset = 0;
     buf->length = 64 * numItem + 4;
     icm_encrypt(sizeof(ECP) + buf->length);
-    
+
     // COPY memory
     uint8_t* data8 = (uint8_t*)addr_dest;
     uint8_t *memory = (uint8_t*)(evm_mem_addr);
@@ -480,7 +481,7 @@ void ecp(uint8_t *in) {
 
     // COPY stack
     // the call params should remain as plaintext
-    uint32_t num_of_call_params = num_of_params[req->func & 0xf]; 
+    uint32_t num_of_params = num_of_call_params[req->func & 0xf]; 
 
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
@@ -493,7 +494,7 @@ void ecp(uint8_t *in) {
       // then pop
       *stackOp = 0;
       count ++;
-      if (flag && count == num_of_call_params || i == 1) {
+      if (flag && count == num_of_params || i == 1) {
         buf->opcode = COPY;
         buf->src = STACK;
         buf->dest = HOST;
