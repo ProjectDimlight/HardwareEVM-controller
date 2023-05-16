@@ -50,7 +50,7 @@ const uint64_t page_of_mask		  = 0x3ff;
 const uint64_t page_size 		    = 0x400;
 
 const uint32_t num_of_call_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
-
+const uint32_t num_of_end_params[]  = {0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1};
 
 int evm_active = 0;
 
@@ -418,16 +418,51 @@ void ecp(uint8_t *in) {
       icm_encrypt(sizeof(ECP) + buf->length);
     }
 
-    // then pack env variables to the END packet
+    // COPY stack
+    // the call params should remain as plaintext
+    uint32_t num_of_params = num_of_end_params[req->func & 0xf]; 
+
+    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+    uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
+    numItem = *stackSize;
+    offset = 4;
+    for (int i = numItem, count = 0, flag = 1; i; i--, offset += 32) {
+      // fetch the top of the stack
+      // which is always mapped to offset 0
+      memcpy_b(data8 + offset, evm_stack_addr, 32);
+      // then pop
+      *stackOp = 0;
+      count ++;
+      if (flag && count == num_of_params || i == 1) {
+        buf->opcode = COPY;
+        buf->src = STACK;
+        buf->dest = HOST;
+        buf->func = flag;  // flag = 1 means start new transmission (clear current stack content), = 0 means continue
+        buf->src_offset = 0;
+        buf->dest_offset = 0;
+        buf->length = 32 * count + 4;
+        data[0] = count;
+        icm_encrypt(sizeof(ECP) + buf->length);
+
+        flag = 0;
+        count = 0;
+        // only send the END params, the rest can be discarded
+        break;
+      }
+    }
+
+    // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
-    uint8_t* data8 = (uint8_t*)addr_dest;
     uint8_t* env = (uint8_t*)(evm_env_addr);
+    uint8_t* pc = env + 32 * 15;
     uint8_t* msize = env + 32 * 9;
     uint8_t* gas = env + 32 * 10;
-    memcpy_b(data8 + 0,  msize, 8);
-    memcpy_b(data8 + 8,  gas,   8);
+    
+    memcpy_b(data8 + 0,  pc,    8);
+    memcpy_b(data8 + 8,  msize, 8);
+    memcpy_b(data8 + 16, gas,   8);
 
-    content_length = 8 * 2;
+    content_length = 8 * 3;
     evm_active = 0;
   }
   else if (req->opcode == CALL) {
