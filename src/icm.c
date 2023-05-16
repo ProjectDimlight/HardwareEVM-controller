@@ -60,6 +60,9 @@ void icm_set_keys(aes128_t user_aes, rsa2048_t user_pub, rsa2048_t user_mod, rsa
 }
 
 void icm_init() {
+  pending_icm_slice_request.valid = false;
+  pending_icm_slice_request.head = icm_raw_data_base;
+
   icm_set_keys(user_aes, user_pub, user_mod, hevm_priv, hevm_pub, hevm_mod);
 }
 
@@ -103,6 +106,89 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
 
 ///////////////////////////////////////////////////////////////////
 
+typedef struct {
+  // memcpy_progress
+  ECP ecp;
+
+  // page_swap
+  uint8_t valid;
+  uint32_t res_offset;
+} Pending_ICM_Slice_Request;
+Pending_ICM_Slice_Request pending_icm_slice_request;
+
+void icm_slice(ECP *req) {
+  if (req) {
+    pending_icm_slice_request.ecp = *req;
+    pending_icm_slice_request.res_offset = 0;
+    req->dest_offset += PAGE_SIZE;
+  }
+  req = &(pending_icm_slice_request.ecp);
+  pending_icm_slice_request.valid = 0;
+
+  uint32_t head = req->src_offset & (PAGE_SIZE | page_of_mask);
+  uint32_t page0_size = PAGE_SIZE - (req->src_offset & page_of_mask);
+  uint32_t page1_head = (head + page0_size) & (PAGE_SIZE + PAGE_SIZE);
+  uint32_t page1_size = PAGE_SIZE - page0_size;
+
+  src_length = req->dest_offset - req->src_offset;
+  if (src_length >= req->length) {
+    // end
+    if (page0_size >= req->length)
+      memcpy(icm_raw_data_base, icm_config->buffer + head, req->length);
+    else {
+      memcpy(icm_raw_data_base, icm_config->buffer + head, page0_size);
+      memcpy(icm_raw_data_base + page0_size, icm_config->buffer + page1_head, req->length - page0_size);
+    }
+
+    ECP *buf = (ECP *)get_output_buffer();
+    buf->opcode = ICM;
+    buf->src = MEM;
+    buf->dest = HOST;
+    buf->func = ICM_COPY;
+    buf->src_offset = pending_icm_slice_request.res_offset;
+    buf->dest_offset = 0;
+    buf->length = req->length;
+    icm_encrypt(sizeof(ECP) + req->length);
+  }
+  else {
+    if (src_length >= PAGE_SIZE) {
+      // build a page
+      memcpy(icm_raw_data_base, icm_config->buffer + head, page0_size);
+      memcpy(icm_raw_data_base + page0_size, icm_config->buffer + page1_head, page1_size);
+      
+      ECP *buf = (ECP *)get_output_buffer();
+      buf->opcode = ICM;
+      buf->src = MEM;
+      buf->dest = HOST;
+      buf->func = ICM_SWAP;
+      buf->src_offset = pending_icm_slice_request.res_offset;
+      buf->dest_offset = req->dest_offset;
+      buf->length = PAGE_SIZE;
+      icm_encrypt(sizeof(ECP) + PAGE_SIZE);
+
+      req->length -= PAGE_SIZE;
+      req->src_offset += PAGE_SIZE;
+      req->dest_offset += PAGE_SIZE;
+      pending_icm_slice_request.res_offset += PAGE_SIZE;
+    } else {
+      // send a query
+      ECP *buf = (ECP *)get_output_buffer();
+      buf->opcode = ICM;
+      buf->src = MEM;
+      buf->dest = HOST;
+      buf->func = ICM_SWAP;
+      buf->src_offset = pending_icm_slice_request.res_offset;
+      buf->dest_offset = req->dest_offset;
+      buf->length = 0;
+      icm_encrypt(sizeof(ECP));
+
+      req->dest_offset += PAGE_SIZE;
+    }
+  }
+}
+
+///////////////////////////////////////////////////////////////////
+
 void icm_generate_dummy_requests() {
   
 }
@@ -117,6 +203,17 @@ uint8_t icm_decrypt() {
   if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     return 1;
+  } else if (req->opcode == ICM) {
+#ifdef ENCRYPTION
+    aes_decrypt(icm_config->buffer + (req->src_offset & PAGE_SIZE), req->data, req->length);
+#else
+    memcpy(icm_config->buffer + (req->src_offset & PAGE_SIZE), req->data, req->length);
+#endif
+    if (req->func == ICM_SLICE) {
+      icm_slice(req);
+    } else {
+      icm_slice(NULL);
+    }
   } else if (req->opcode == CALL) {
     // memorize the contract address
     memcpy(icm_config->contract_address, req->data, sizeof(address_t));

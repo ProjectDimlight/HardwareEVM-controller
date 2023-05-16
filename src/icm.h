@@ -9,7 +9,15 @@ typedef uint8_t address_t[20];
 typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
 
+enum ICMFunc{
+  ICM_SLICE,
+  ICM_COPY,
+  ICM_SWAP
+}
+
 typedef struct {
+  uint8_t buffer[4096];
+
   uint256_t block_hash;
   address_t contract_address;
 

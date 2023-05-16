@@ -58,7 +58,6 @@ typedef struct {
   ECP ecp;
 
   // page_swap
-  uint32_t page_offset;
   uint8_t valid;
 } Pending_EVM_Memory_Copy_Request;
 Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
@@ -80,7 +79,6 @@ void clear_tag(uint8_t data_source, uint32_t offset) {
 // this function only records the page that we requires, then exits immediately
 // after the page is swapped, we will call evm_memory_copy again
 void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t dest_offset) {
-  pending_evm_memory_copy_request.page_offset = dest_offset;
   pending_evm_memory_copy_request.valid = 1;
 
   // send the output request
@@ -400,6 +398,24 @@ void ecp(uint8_t *in) {
     buf->dest_offset = 0;
     buf->length = 64 * numItem + 4;
     icm_encrypt(sizeof(ECP) + buf->length);
+    
+    // COPY memory
+    uint8_t* data8 = (uint8_t*)addr_dest;
+    uint8_t *memory = (uint8_t*)(evm_mem_addr);
+    for (int i = 0; i < NUMBER_OF_PAGES; i++) {
+      uint32_t pte = *data_source_to_pte(MEM, i << 10);
+      if ((pte & 2) == 0)  // empty
+        continue;
+
+      buf->opcode = COPY;
+      buf->src = MEM;
+      buf->dest = HOST;
+      buf->src_offset = pte & page_tagid_mask;
+      buf->dest_offset = 0;
+      buf->length = 1024;
+      memcpy_b(data8, memory + (i << 10), 1024);
+      icm_encrypt(sizeof(ECP) + buf->length);
+    }
 
     // then pack env variables to the END packet
     // pc, msize, gas
@@ -410,10 +426,7 @@ void ecp(uint8_t *in) {
     memcpy_b(data8 + 0,  msize, 8);
     memcpy_b(data8 + 8,  gas,   8);
 
-    // copy return data from mem / call params from stack
-    memcpy_b(addr_dest + 16, addr_src, req->length);
-
-    content_length = req->length + 16;
+    content_length = 8 * 2;
     evm_active = 0;
   }
   else if (req->opcode == CALL) {
@@ -450,12 +463,6 @@ void ecp(uint8_t *in) {
     // COPY memory
     uint8_t* data8 = (uint8_t*)addr_dest;
     uint8_t *memory = (uint8_t*)(evm_mem_addr);
-
-    uint8_t* env = (uint8_t*)(evm_env_addr);
-    uint8_t* pc = env + 32 * 15;
-    uint8_t* msize = env + 32 * 9;
-    uint8_t* gas = env + 32 * 10;
-    
     for (int i = 0; i < NUMBER_OF_PAGES; i++) {
       uint32_t pte = *data_source_to_pte(MEM, i << 10);
       if ((pte & 2) == 0)  // empty
@@ -504,6 +511,11 @@ void ecp(uint8_t *in) {
 
     // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
+    uint8_t* env = (uint8_t*)(evm_env_addr);
+    uint8_t* pc = env + 32 * 15;
+    uint8_t* msize = env + 32 * 9;
+    uint8_t* gas = env + 32 * 10;
+    
     memcpy_b(data8 + 0,  pc,    8);
     memcpy_b(data8 + 8,  msize, 8);
     memcpy_b(data8 + 16, gas,   8);
