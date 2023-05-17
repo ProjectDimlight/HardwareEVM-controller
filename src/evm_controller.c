@@ -93,7 +93,7 @@ void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t d
 
   if (dirty) {
     buf->func = 1;
-    memcpy_b(buf->data, data_source_to_address(src, src_offset), 1024);
+    memcpy_b(icm_raw_data_base, data_source_to_address(src, src_offset), 1024);
     icm_encrypt(sizeof(ECP) + 1024);
   } else {
     buf->func = 0;
@@ -131,18 +131,11 @@ void evm_memory_copy(ECP *req) {
       return;
     }
 
-    // if the source and dest maps to the same cache-page
-    // we must use a temporary buffer to avoid data corruption
-    // in fact, if they are actually the same page, we can use memcpy_b directly
-    // but we are not implementing that now
-    if (pte_src == pte_dest) {
-      memcpy_b(icm_raw_data_base, addr_src, step_length);
-    }
-
     if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tag_mask) != (req->dest_offset & page_tag_mask)) {
       async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask);
       return;
     }
+    
     // copy
     
     if (pte_src == pte_dest) {
