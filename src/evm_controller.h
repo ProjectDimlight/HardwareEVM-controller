@@ -52,7 +52,8 @@ enum DataSource {
   ENV,
   STACK,
   HOST,
-  RETURNDATA
+  OCM_RETURNDATA,
+  OCM_MEM
 };
 
 typedef struct {

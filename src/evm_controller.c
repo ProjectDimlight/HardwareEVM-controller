@@ -64,11 +64,19 @@ typedef struct {
 Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
 
 void *data_source_to_address(uint8_t data_source, uint32_t offset) {
+  if (data_source == OCM_RETURNDATA)
+    return icm_config->ocm_return_page + (offset & page_idof_mask);
+  else if (data_source == OCM_MEM)
+    return icm_config->ocm_mem_page + (offset & page_idof_mask);
   return (void *) (evm_base_addr + (data_source << 16) + (offset & page_idof_mask));
 }
 
 uint32_t *data_source_to_pte(uint8_t data_source, uint32_t offset) {
   // page addr: 10bit, pte addr: 2bit
+  if (data_source == OCM_RETURNDATA)
+    return &(icm_config->ocm_return_pte);
+  else if (data_source == OCM_MEM)
+    return &(icm_config->ocm_mem_pte);
   return (uint32_t *) (evm_base_addr + (data_source << 16) + pt_offset + ((offset & page_id_mask) >> 8));
 }
 
@@ -101,9 +109,29 @@ void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t d
   }
 }
 
+void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
+  if (!dirty) return;
+
+  // send the output request
+  ECP *buf = (ECP *)get_output_buffer();
+  buf->opcode = COPY;
+  buf->src = src;
+  buf->dest = HOST;
+  buf->src_offset = src_offset;
+  buf->dest_offset = 0;
+  buf->length = 1024;
+
+  buf->func = 1;
+  memcpy_b(icm_raw_data_base, data_source_to_address(src, src_offset), 1024);
+  icm_encrypt(sizeof(ECP) + 1024);
+}
+
 void evm_memory_copy(ECP *req) {
-  if (req)
+  if (req) {
     pending_evm_memory_copy_request.ecp = *req;
+    clear_tag(OCM_RETURNDATA, 0);
+    clear_tag(OCM_MEM, 0);
+  }
   req = &(pending_evm_memory_copy_request.ecp);
   pending_evm_memory_copy_request.valid = 0;
 
@@ -125,24 +153,27 @@ void evm_memory_copy(ECP *req) {
     if ((req->dest_offset & page_of_mask) + step_length >= page_size)
       step_length = page_size - (req->dest_offset & page_of_mask);
 
-
     if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tag_mask) != (req->src_offset & page_tag_mask)) {
+      // src of copy are always immutable (CALLDATA, RETURNDATA, etc) or MEMORY after execution and thus can never be dirty
       async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask);
       return;
     }
 
     if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tag_mask) != (req->dest_offset & page_tag_mask)) {
-      async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask);
-      return;
+      if (req->dest != OCM_RETURNDATA &&
+          ((req->dest_offset & page_of_mask) != 0 || req->length < page_size)
+      ) {
+        // not a full page, require from host
+        async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask);
+        return;
+      } else {
+        sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
+      }
     }
     
     // copy
-    
-    if (pte_src == pte_dest) {
-      memcpy_b(addr_dest, icm_raw_data_base, step_length);
-    } else {
-      memcpy_b(addr_dest, addr_src, step_length);
-    }
+    memcpy_b(addr_dest, addr_src, step_length);
+    *pte_dest |= 0x3;
 
 #ifdef SIMULATION
     sleep(5);
@@ -155,6 +186,12 @@ void evm_memory_copy(ECP *req) {
     req->src_offset += step_length;
     req->dest_offset += step_length;
     req->length -= step_length;
+  }
+
+  // finalize
+  if (req->dest == OCM_MEM || req->dest == OCM_RETURNDATA) {
+    pte_dest = data_source_to_pte(req->dest, 0);
+    sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
   }
 }
 
@@ -194,10 +231,10 @@ void ecp(uint8_t *in) {
   if (req->src == HOST) {
     if (req->opcode == CALL) {
       // clear memory valid tag
-      // code: clear except first page
+      // code: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(CODE, i << 10);
-      // calldata: clear except first page
+      // calldata: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(CALLDATA, i << 10);
       // returndata: clear all
