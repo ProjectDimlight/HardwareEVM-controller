@@ -17,12 +17,10 @@ enum ICMFunc{
 };
 
 typedef struct {
-  uint8_t buffer[4096];
-
   uint8_t ocm_mem_page[PAGE_SIZE];
-  uint8_t ocm_return_page[PAGE_SIZE];
+  uint8_t ocm_immutable_page[PAGE_SIZE];
 
-  uint32_t ocm_mem_pte, ocm_return_pte;
+  uint32_t ocm_mem_pte, ocm_immutable_pte;
 
   uint256_t block_hash;
   address_t contract_address;

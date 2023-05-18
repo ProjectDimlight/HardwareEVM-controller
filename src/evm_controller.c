@@ -64,17 +64,17 @@ typedef struct {
 Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
 
 void *data_source_to_address(uint8_t data_source, uint32_t offset) {
-  if (data_source == OCM_RETURNDATA)
-    return icm_config->ocm_return_page + (offset & page_idof_mask);
+  if (data_source == OCM_IMMUTABLE_MEM)
+    return icm_config->ocm_immutable_page + (offset & page_of_mask);
   else if (data_source == OCM_MEM)
-    return icm_config->ocm_mem_page + (offset & page_idof_mask);
+    return icm_config->ocm_mem_page + (offset & page_of_mask);
   return (void *) (evm_base_addr + (data_source << 16) + (offset & page_idof_mask));
 }
 
 uint32_t *data_source_to_pte(uint8_t data_source, uint32_t offset) {
   // page addr: 10bit, pte addr: 2bit
-  if (data_source == OCM_RETURNDATA)
-    return &(icm_config->ocm_return_pte);
+  if (data_source == OCM_IMMUTABLE_MEM)
+    return &(icm_config->ocm_immutable_pte);
   else if (data_source == OCM_MEM)
     return &(icm_config->ocm_mem_pte);
   return (uint32_t *) (evm_base_addr + (data_source << 16) + pt_offset + ((offset & page_id_mask) >> 8));
@@ -129,7 +129,7 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
 void evm_memory_copy(ECP *req) {
   if (req) {
     pending_evm_memory_copy_request.ecp = *req;
-    clear_tag(OCM_RETURNDATA, 0);
+    clear_tag(OCM_IMMUTABLE_MEM, 0);
     clear_tag(OCM_MEM, 0);
   }
   req = &(pending_evm_memory_copy_request.ecp);
@@ -153,14 +153,14 @@ void evm_memory_copy(ECP *req) {
     if ((req->dest_offset & page_of_mask) + step_length >= page_size)
       step_length = page_size - (req->dest_offset & page_of_mask);
 
-    if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tag_mask) != (req->src_offset & page_tag_mask)) {
+    if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tagid_mask) != (req->src_offset & page_tagid_mask)) {
       // src of copy are always immutable (CALLDATA, RETURNDATA, etc) or MEMORY after execution and thus can never be dirty
       async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask);
       return;
     }
 
-    if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tag_mask) != (req->dest_offset & page_tag_mask)) {
-      if (req->dest != OCM_RETURNDATA &&
+    if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tagid_mask) != (req->dest_offset & page_tagid_mask)) {
+      if (req->dest != OCM_IMMUTABLE_MEM &&
           ((req->dest_offset & page_of_mask) != 0 || req->length < page_size)
       ) {
         // not a full page, require from host
@@ -168,6 +168,7 @@ void evm_memory_copy(ECP *req) {
         return;
       } else {
         sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
+        *pte_dest = req->dest_offset & page_tagid_mask;
       }
     }
     
@@ -189,7 +190,7 @@ void evm_memory_copy(ECP *req) {
   }
 
   // finalize
-  if (req->dest == OCM_MEM || req->dest == OCM_RETURNDATA) {
+  if (req->dest == OCM_MEM || req->dest == OCM_IMMUTABLE_MEM) {
     pte_dest = data_source_to_pte(req->dest, 0);
     sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
   }
