@@ -11,9 +11,7 @@ typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
 
 enum ICMFunc{
-  ICM_SLICE = 1,
-  ICM_COPY,
-  ICM_SWAP
+  ICM_CLEAR_STORAGE = 1
 };
 
 typedef struct {

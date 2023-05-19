@@ -85,6 +85,14 @@ void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
 }
 
+void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  memcpy(out, in, size);
+  for (uint32_t i = size; i; i -= 32) {
+    AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out + i - 32, 32);
+  }
+}
+
 uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 16);
@@ -129,7 +137,12 @@ void icm_record_history() {
 uint8_t icm_decrypt() {
   ECP *req = get_input_buffer();
   
-  if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
+  if (req->opcode == ICM) {
+    if (req->func == ICM_CLEAR_STORAGE) {
+      icm_clear_storage();
+    }
+    return 0;
+  } else if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     return 1;
   } else if (req->opcode == CALL) {
@@ -202,9 +215,14 @@ uint8_t icm_decrypt() {
       // the size of memory pages and stack elements are always multiples of 16
       // so there is no need to pad content_length
       if (req->dest == STACK) {
-        // there is a 4-byte "num_of_items" field before stack elements
-        aes_decrypt(icm_raw_data_base + 4, req->data + 4, req->length - 4);
-        *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
+        if (req->func == 0) {
+          // plain text, do not decrypt
+          memcpy(icm_raw_data_base, req->data, req->length);
+        } else {
+          // there is a 4-byte "num_of_items" field before stack elements
+          aes_decrypt_stack(icm_raw_data_base + 4, req->data + 4, req->length - 4);
+          *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
+        }
 
         // do not check signature here
       } else if (req->src == HOST && (req->dest == MEM || req->dest == OCM_MEM) && req->func == 0) {
@@ -336,6 +354,17 @@ void icm_encrypt(uint32_t length) {
           // plaintext
           memcpy(req->data, icm_raw_data_base, content_length);
         } else {
+          /*
+          char t[16];
+          memcpy(t, req, 16);
+          
+          memcpy(get_output_buffer(), "echo", 4);
+          memcpy(get_output_buffer() + 4, icm_raw_data_base + 4, ((ECP*)t)->length - 4);
+          build_outgoing_packet(((ECP*)t)->length);
+
+          memcpy(req, t, 16);
+          */
+
           content_length = 4 + aes_encrypt(req->data + 4, icm_raw_data_base + 4, content_length - 4);
           *(uint32_t*)req->data = *(uint32_t*)icm_raw_data_base;
         }

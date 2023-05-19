@@ -457,13 +457,14 @@ void ecp(uint8_t *in) {
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
     numItem = *stackSize;
     offset = 4;
-    for (int i = numItem, count = 0, flag = 1; i; i--, offset += 32) {
+    for (int i = numItem, count = 0, flag = 1; i; i--) {
       // fetch the top of the stack
       // which is always mapped to offset 0
       memcpy_b(data8 + offset, evm_stack_addr, 32);
       // then pop
       *stackOp = 0;
       count ++;
+      offset += 32;
       if (flag && count == num_of_params || i == 1) {
         buf->opcode = COPY;
         buf->src = STACK;
@@ -477,6 +478,7 @@ void ecp(uint8_t *in) {
 
         flag = 0;
         count = 0;
+        offset = 4;
         // only send the END params, the rest can be discarded
         break;
       }
@@ -553,13 +555,14 @@ void ecp(uint8_t *in) {
     uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
     numItem = *stackSize;
     offset = 4;
-    for (int i = numItem, count = 0, flag = 1; i; i--, offset += 32) {
+    for (int i = numItem, count = 0, flag = 1; i; i--) {
       // fetch the top of the stack
       // which is always mapped to offset 0
       memcpy_b(data8 + offset, evm_stack_addr, 32);
       // then pop
       *stackOp = 0;
       count ++;
+      offset += 32;
       if (flag && count == num_of_params || i == 1) {
         buf->opcode = COPY;
         buf->src = STACK;
@@ -573,6 +576,7 @@ void ecp(uint8_t *in) {
 
         flag = 0;
         count = 0;
+        offset = 4;
       }
     }
 
