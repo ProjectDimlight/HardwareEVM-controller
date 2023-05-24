@@ -45,6 +45,7 @@
 void *get_input_buffer();
 void *get_output_buffer();
 
+void trigger_input();
 uint8_t *check_incoming_packet();
 void build_outgoing_packet(uint32_t len);
 void build_raw_packet(uint32_t len);

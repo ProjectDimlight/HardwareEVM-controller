@@ -52,6 +52,10 @@ void *get_output_buffer() {
   return buf_out;
 }
 
+void trigger_input() {
+	xemacif_input(&server_netif);
+}
+
 uint8_t *check_incoming_packet() {
 	xemacif_input(&server_netif);
 	// now the packet is in the input buffer, but encrypted
@@ -78,9 +82,9 @@ static void build_incoming_packet(struct pbuf *p) {
 static void udp_recv_packet(void *arg, struct udp_pcb *rpcb,
 		struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
-	tpcb = rpcb;
-	memcpy(&taddr, addr, sizeof(ip_addr_t));
-	tport = port;
+	// tpcb = rpcb;
+	// memcpy(&taddr, addr, sizeof(ip_addr_t));
+	// tport = port;
 
 	build_incoming_packet(p);
 	
@@ -205,9 +209,11 @@ void start_application(void)
 	/* specify callback to use for incoming connections */
 	udp_recv(pcb, udp_recv_packet, NULL);
 
+	//tpcb = pcb;
+	
 	tpcb = pcb;
-	taddr.addr = 0xc0a80102;
-	tport = 5002;
+	taddr.addr = 0x0201a8c0;
+	tport = 23333;
 
 	return;
 }

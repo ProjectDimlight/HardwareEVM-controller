@@ -139,6 +139,14 @@ void evm_memory_copy(ECP *req) {
   uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
+    /*
+    memcpy_b(get_output_buffer()   , "step", 4);
+    memcpy_b(get_output_buffer()+ 4, &(req->src_offset), 4);
+    memcpy_b(get_output_buffer()+ 8, &(req->dest_offset), 4);
+    memcpy_b(get_output_buffer()+12, &(req->length), 4);
+    build_outgoing_packet(16);
+    */
+    
     // before page
     addr_src = data_source_to_address(req->src, req->src_offset);
     addr_dest = data_source_to_address(req->dest, req->dest_offset);
@@ -153,6 +161,7 @@ void evm_memory_copy(ECP *req) {
     if ((req->dest_offset & page_of_mask) + step_length >= page_size)
       step_length = page_size - (req->dest_offset & page_of_mask);
 
+    trigger_input();
     if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tagid_mask) != (req->src_offset & page_tagid_mask)) {
       // src of copy are always immutable (CALLDATA, RETURNDATA, etc) or MEMORY after execution and thus can never be dirty
       async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask);
@@ -269,6 +278,10 @@ void ecp(uint8_t *in) {
       // tell hevm to stop
       evm_active = 0;
       *(char*)(evm_cin_addr + 4) = 0;
+
+      // stop copying
+      pending_evm_memory_copy_request.valid = 0;
+
       return;
     }
   }
