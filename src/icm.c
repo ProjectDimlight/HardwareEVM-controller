@@ -80,8 +80,8 @@ void icm_init() {
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  memcpy(out, in, size);
   size = padded_size(size, 16);
+  memcpy(out, in, size);
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
 }
 
@@ -233,6 +233,11 @@ uint8_t icm_decrypt() {
         memcpy(icm_raw_data_base, req->data, req->length);
       } else {
         aes_decrypt(icm_raw_data_base, req->data, req->length);
+        /*
+        memcpy(get_output_buffer(), "echo", 4);
+        memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
+        build_outgoing_packet(4 + req->length);
+        */
       }
 #else
       memcpy(icm_raw_data_base, req->data, req->length);

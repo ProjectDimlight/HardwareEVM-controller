@@ -129,6 +129,9 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
 void evm_memory_copy(ECP *req) {
   if (req) {
     pending_evm_memory_copy_request.ecp = *req;
+    if (req->src == RETURNDATA) {
+      pending_evm_memory_copy_request.ecp.src = OCM_IMMUTABLE_MEM;
+    }
     clear_tag(OCM_IMMUTABLE_MEM, 0);
     clear_tag(OCM_MEM, 0);
   }
@@ -608,6 +611,30 @@ void ecp(uint8_t *in) {
     evm_active = 0;
   }
   else if (req->opcode == QUERY) {
+    if (req->func == 0x1c) {  // ext code copy
+      // COPY memory
+      ECP *buf = get_output_buffer();
+      uint8_t* data8 = (uint8_t*)addr_dest;
+      uint8_t *memory = (uint8_t*)(evm_mem_addr);
+      for (int i = 0; i < NUMBER_OF_PAGES; i++) {
+        uint32_t pte = *data_source_to_pte(MEM, i << 10);
+        if ((pte & 2) == 0)  // empty
+          continue;
+
+        buf->opcode = COPY;
+        buf->src = MEM;
+        buf->dest = HOST;
+        buf->src_offset = pte & page_tagid_mask;
+        buf->dest_offset = 0;
+        buf->length = 1024;
+        memcpy_b(data8, memory + (i << 10), 1024);
+        icm_encrypt(sizeof(ECP) + buf->length);
+
+        // clear mem cache
+        *data_source_to_pte(MEM, i << 10) = 0;
+      }
+    }
+
     // queries need an address (or blockid) as param
     // which is always located at the top of the stack
     content_length = 32;
