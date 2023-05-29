@@ -1,3 +1,6 @@
 /Debug/
 /Release/
 /_ide/
+.cproject
+.project
+hevm_ctrl_udp.prj
