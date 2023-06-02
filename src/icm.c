@@ -10,11 +10,11 @@
 // these address spaces are mapped to secure on chip memory
 void *icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
 void *icm_temp_storage_base     = (void*)0xFFFD0000ll;   // temporary storage
-void *icm_storage_history_base  = (void*)0xFFFE0000ll;   // storage history window for dummy request generation
-void *icm_config_base           = (void*)0xFFFF0000ll;   // system configuration
+void *icm_config_base           = (void*)0xFFFE0000ll;   // system configuration and sensitive data
+void *icm_rt_base               = (void*)0xFFFF0000ll;   // runtime, stack and heap
 
 ICMTempStorage *icm_temp_storage= (ICMTempStorage*)0xFFFD0000ll;
-ICMConfig      *icm_config      = (ICMConfig*)0xFFFF0000ll;
+ICMConfig      *icm_config      = (ICMConfig*)0xFFFE0000ll;
 
 uint32_t icm_hash(address_t address, uint256_t key) {
   uint32_t ad = *(uint32_t*)(address + 0);

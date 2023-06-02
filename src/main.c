@@ -5,6 +5,19 @@
 
 extern uint32_t input_size;
 
+/*
+void test_malloc() {
+  uint32_t *a = malloc(4096);
+
+  for (int i = 0; i < 1024; i++)
+    a[i] = i;
+
+  memcpy(get_output_buffer(), "test", 4);
+  memcpy(get_output_buffer() + 4, 0xFFFF0000, 4096);
+  build_outgoing_packet(4100);
+}
+*/
+
 int main(void)
 {
   /* start the application*/
@@ -32,6 +45,11 @@ int main(void)
     uint8_t *p = check_incoming_packet();
     if (p) {
       ecp(p);
+      /*
+      if (!started) {
+        test_malloc();
+      }
+      */
       started = 1;
     }
 

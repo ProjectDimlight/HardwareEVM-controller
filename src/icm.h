@@ -3,7 +3,7 @@
 
 #include "aes.h"
 #include "evm_controller.h"
-#include "xsecure.h"
+// #include "xsecure.h"
 
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
