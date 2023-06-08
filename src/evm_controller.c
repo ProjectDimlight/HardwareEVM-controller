@@ -230,9 +230,6 @@ void check_debug_buffer() {
   }
 }
 
-// TODO
-// no longer copy the plaintext into the output buffer
-// but to the ICM_RAW_DATA_BASE for encryption
 void ecp(uint8_t *in) {
   ECP header;
   memcpy(&header, in, 16);
@@ -305,7 +302,7 @@ void ecp(uint8_t *in) {
 
   if (req->opcode == COPY) {
     if (req->src == STORAGE) {
-      // TODO
+      // Never will happen
     }
     else if (req->dest == STORAGE) {
       // fetch all kv pairs and insert to local storage
@@ -359,7 +356,7 @@ void ecp(uint8_t *in) {
           evm_memory_copy(NULL);
         }
       } else if (req->dest == HOST) {
-        // TODO
+        // Never will happen
       } else {
         evm_memory_copy(req);
       }
@@ -641,7 +638,7 @@ void ecp(uint8_t *in) {
     memcpy_b(addr_dest, evm_stack_addr, content_length);
   }
   else if (req->opcode == LOG) {
-    // [TODO] send the stack contents to host
+    // [TODO] send the stack contents to host as log
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     for (int i = 0; i < req->func; i++)
       *stackOp = 0;

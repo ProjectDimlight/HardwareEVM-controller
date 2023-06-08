@@ -1,11 +1,16 @@
 #include <gmp.h>
 #include "rsa.h"
 
-#define RSA_KEY_LENGTH 1024
-#define PRIME_TEST_ITERATIONS 20
+void RSA_init_keys(mpz_t n, mpz_t e, mpz_t d, uint8_t N[], uint8_t E[]) {
+    D = 0x10001;
+
+    mpz_t my_key;
+    mpz_init(my_key);
+    mpz_import(my_key, 16, 1, 1, 1, 0, key);
+}
 
 /*
-void generate_keys(mpz_t n, mpz_t e, mpz_t d) {
+void RSA_generate_keys(mpz_t n, mpz_t e, mpz_t d) {
     mpz_t p, q, phi, gcd, tmp;
     gmp_randstate_t state;
     gmp_randinit_mt(state);
@@ -54,15 +59,15 @@ void generate_keys(mpz_t n, mpz_t e, mpz_t d) {
 }
 */
 
-void encrypt(mpz_t c, mpz_t m, mpz_t n, mpz_t e) {
+void RSA_encrypt(mpz_t c, mpz_t m, mpz_t n, mpz_t e) {
     mpz_powm(c, m, e, n);
 }
 
-void decrypt(mpz_t m, mpz_t c, mpz_t n, mpz_t d) {
+void RSA_decrypt(mpz_t m, mpz_t c, mpz_t n, mpz_t d) {
     mpz_powm(m, c, d, n);
 }
 
-void sign(mpz_t s, mpz_t m, mpz_t n, mpz_t d, mpz_t e) {
+void RSA_sign(mpz_t s, mpz_t m, mpz_t n, mpz_t d, mpz_t e) {
     mpz_t salt, padded, tmp;
     gmp_randstate_t state;
     gmp_randinit_mt(state);
@@ -95,7 +100,7 @@ void sign(mpz_t s, mpz_t m, mpz_t n, mpz_t d, mpz_t e) {
     gmp_randclear(state);
 }
 
-int verify(mpz_t s, mpz_t m, mpz_t n, mpz_t d, mpz_t e) {
+int RSA_verify(mpz_t s, mpz_t m, mpz_t n, mpz_t d, mpz_t e) {
     mpz_t padded, salt, tmp;
     gmp_randstate_t state;
     gmp_randinit_mt(state);

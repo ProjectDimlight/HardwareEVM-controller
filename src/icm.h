@@ -1,8 +1,10 @@
 // This is the integrity and confidentiality manager
 // which will be called by the udp_server
 
-#include "aes.h"
 #include "evm_controller.h"
+#include "aes.h"
+#include "sha3.h"
+#include "uECC.h"
 // #include "xsecure.h"
 
 typedef uint8_t uint256_t[32];
@@ -11,21 +13,36 @@ typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
 
 enum ICMFunc{
-  ICM_CLEAR_STORAGE = 1
+  ICM_CLEAR_STORAGE = 1,
+  ICM_SET_USER_PUB
 };
 
 typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
-
   uint32_t ocm_mem_pte, ocm_immutable_pte;
+
+  ////////////////////////////////////////////
 
   uint256_t block_hash;
   address_t contract_address;
 
+  uint8_t stack_integrity_valid;
+
+  ////////////////////////////////////////////
+
   uint256_t sload_real_key;
+  
+  ////////////////////////////////////////////
 
   struct AES_ctx aes_inst;
+  
+  uECC_Curve curve;
+  uint8_t hevm_pub[32], hevm_priv[32]; 
+  uint8_t user_pub[32];
+
+  sha3_context sha_inst;
+
 } ICMConfig;
 
 typedef struct {
