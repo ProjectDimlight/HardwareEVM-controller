@@ -3,7 +3,7 @@
 
 #include "evm_controller.h"
 #include "aes.h"
-#include "sha3.h"
+// #include "sha3.h"
 #include "uECC.h"
 // #include "xsecure.h"
 
@@ -109,11 +109,12 @@ void icm_clear_storage();
 // the ECP points to the input buffer where encrypted payload is located at
 // the signature type is adaptive
 // we use merkle proof for storage and RSA-SHA3 signature for others
-// the return value indicates whether the ECP function shoule be called
+// return 1 if the ECP handler function should be callled
 uint8_t icm_decrypt();
 
 // the payload should be copied to the secure OCM by the ECP handler
 // which is always located at icm_raw_data_base
 // the encrypted version will be put together with the ECP header in the UDP obuf
 // the length should be the entire length (with the ECP header)
-void icm_encrypt(uint32_t length);
+// returns 1 if icm solves the request and can resume, 0 if the request is passed to HOST
+uint8_t icm_encrypt(uint32_t length);

@@ -73,6 +73,8 @@ typedef struct {
 } Pending_EVM_Memory_Copy_Request;
 Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
 
+///////////////////////////////////////////////////////////////////
+
 void *data_source_to_address(uint8_t data_source, uint32_t offset) {
   if (data_source == OCM_IMMUTABLE_MEM)
     return icm_config->ocm_immutable_page + (offset & page_of_mask);
@@ -94,6 +96,169 @@ void clear_tag(uint8_t data_source, uint32_t offset) {
   (*data_source_to_pte(data_source, offset)) &= ~3;  // not valid
 }
 
+///////////////////////////////////////////////////////////////////
+
+uint32_t evm_store_stack(int num_of_params) {
+  volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+  uint32_t* stackSize = (uint32_t*)evm_env_stack_size;
+  uint8_t* data8 = (uint8_t*)icm_raw_data_base;
+  
+  uint32_t numItem = *stackSize, offset = 4, count = 0;
+  for (int i = numItem; i; i--) {
+    // fetch the top of the stack
+    // which is always mapped to offset 0
+    memcpy_b(data8 + offset, evm_stack_addr, 32);
+    // then pop
+    *stackOp = 0;
+
+    count ++;
+    offset += 32;
+    if (num_of_params >= 0 && count == num_of_params || i == 1)
+      break;
+  }
+  *(uint32_t*)data8 = count;
+  return 32 * count + 4;
+}
+
+void evm_load_stack() {
+  void *addr_src = icm_raw_data_base;
+
+  uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
+  volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+  uint32_t* stackSize = (uint32_t*)(evm_env_stack_size);
+
+  if (req->func == 1) {  // clear all current contents
+    evm_clear_stack();
+  }
+
+  // Then push
+  uint32_t numItem = *(uint32_t*)addr_src;
+  uint8_t* data = (uint8_t*)addr_src + 4;
+
+  for (int i = 0; i < numItem; i++, data += 32) {
+    memcpy_b(stackData, data, 32);
+    *stackOp = 1;
+  }
+}
+
+void evm_clear_stack() {
+  uint32_t* stackSize = (uint32_t*)(evm_env_stack_size);
+  for (int i = *stackSize; i; i--) {
+    // pop
+    *stackOp = 0;
+  }
+}
+
+///////////////////////////////////////////////////////////////////
+
+void evm_store_storage() {
+  uint32_t numItem = 0, offset = 1;
+  uint32_t* data = (uint32_t*)icm_raw_data_base;
+  uint32_t* slot = (uint32_t*)evm_storage_addr;
+  for (uint32_t index = 0; index < 64; index++, slot += 16)
+    // copy out if valid
+    if ((slot[0] & 0x1) == 0x1) {
+      data[offset] = (slot[0] & 0xffffffc0) + index;
+      for (int i = 1; i < 16; i++)
+        data[offset + i] = slot[i];
+      numItem++, offset += 16;
+    }
+  data[0] = numItem;
+
+  return 64 * numItem + 4;
+}
+
+void evm_load_storage() {
+  // fetch all kv pairs and insert to local storage
+  uint32_t* data = (uint32_t*)icm_raw_data_base;
+  uint32_t numItem = data[0], offset = 1;
+
+  for (int i = 0; i < numItem; i++, offset += 16) {
+    uint32_t index = data[offset] & 0x3f;
+    uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
+    slot[0] = (data[offset] & 0xffffffc0) + 0x1;
+    for (int j = 1; j < 16; j++)
+      slot[j] = data[offset + j];
+  }
+}
+
+uint32_t evm_swap_storage(uint32_t *slot) {
+  uint32_t* data = (uint32_t*)icm_raw_data_base;
+
+  // commit dirty item
+  uint32_t offset = 1;
+  // copy out if valid
+  if ((slot[0] & 0x1) == 0x1) {
+    data[0] = 1;
+    // copy out to OCM if valid for better performance
+    // regardless of whether it is dirty
+    for (int i = 0; i < 16; i++)
+      data[i + 1] = slot[i];
+    uint32_t tmp = data[1] & 0xffffffc0;
+    data[1] = tmp | (req->src_offset >> 6);
+    slot[0] = slot[0] & ~0x3;  		// clean dirty bit
+    offset += 16;
+  } else {
+    data[0] = 0;
+  }
+
+  // require missing item
+  data[offset] = 1;
+  offset++;
+  slot = (uint32_t*)(evm_storage_addr + 0xff00);
+  for (int i = 0; i < 8; i++)
+    data[i + offset] = slot[i];
+  data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
+  offset += 8;
+  
+  return offset * 4;
+}
+
+void evm_clear_storage() {
+  // clear storage
+  uint32_t* slot = (uint32_t*)evm_storage_addr;
+  for (uint32_t index = 0; index < 64; index++, slot += 16)
+    slot[0] = 0;
+}
+
+///////////////////////////////////////////////////////////////////
+
+void evm_dump_memory() {
+  ECP *buf = get_output_buffer();
+  uint8_t* data8 = (uint8_t*)icm_raw_data_base;
+  uint8_t *memory = (uint8_t*)evm_mem_addr;
+  for (int i = 0; i < NUMBER_OF_PAGES; i++) {
+    uint32_t pte = *data_source_to_pte(MEM, i << 10);
+    if ((pte & 2) == 0)  // empty
+      continue;
+
+    buf->opcode = COPY;
+    buf->src = MEM;
+    buf->dest = HOST;
+    buf->src_offset = pte & page_tagid_mask;
+    buf->dest_offset = 0;
+    buf->length = 1024;
+    memcpy_b(data8, memory + (i << 10), 1024);
+    icm_encrypt(sizeof(ECP) + buf->length);
+
+    // clear mem cache
+    *data_source_to_pte(MEM, i << 10) = 0;
+  }
+}
+
+void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
+  void *addr_dest = data_source_to_address(dest, dest_offset);
+  memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
+
+  if (req->dest != ENV) {
+    // update page table
+    uint32_t *pte = data_source_to_pte(dest, dest_offset);
+    *pte = (dest_offset & page_tagid_mask) | 0x2;
+  }
+}
+
+///////////////////////////////////////////////////////////////////
+
 // here we use a tricky solution
 // this function only records the page that we requires, then exits immediately
 // after the page is swapped, we will call evm_memory_copy again
@@ -109,14 +274,20 @@ void async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_t d
   buf->dest_offset = dest_offset;
   buf->length = 1024;
 
+  uint8_t ready;
   if (dirty) {
     buf->func = 1;
     memcpy_b(icm_raw_data_base, data_source_to_address(src, src_offset), 1024);
-    icm_encrypt(sizeof(ECP) + 1024);
+    ready = icm_encrypt(sizeof(ECP) + 1024);
   } else {
     buf->func = 0;
-    icm_encrypt(sizeof(ECP) + 0);
+    ready = icm_encrypt(sizeof(ECP) + 0);
   }
+
+  if (ready) {
+    evm_load_memlike(src, dest_offset);
+  }
+  return ready;
 }
 
 void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
@@ -177,8 +348,8 @@ void evm_memory_copy(ECP *req) {
     trigger_input();
     if (((*pte_src) & 2) == 0 || ((*pte_src) & page_tagid_mask) != (req->src_offset & page_tagid_mask)) {
       // src of copy are always immutable (CALLDATA, RETURNDATA, etc) or MEMORY after execution and thus can never be dirty
-      async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask);
-      return;
+      if (!async_page_swap(0, req->src, (*pte_src) & page_tagid_mask, req->src_offset & page_tagid_mask))
+        return;
     }
 
     if (((*pte_dest) & 2) == 0 || ((*pte_dest) & page_tagid_mask) != (req->dest_offset & page_tagid_mask)) {
@@ -186,8 +357,8 @@ void evm_memory_copy(ECP *req) {
           ((req->dest_offset & page_of_mask) != 0 || req->length < page_size)
       ) {
         // not a full page, require from host
-        async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask);
-        return;
+        if (!async_page_swap(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask, req->dest_offset & page_tagid_mask))
+          return;
       } else {
         sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
         *pte_dest = req->dest_offset & page_tagid_mask;
@@ -244,9 +415,9 @@ void ecp(uint8_t *in) {
   ECP header;
   memcpy(&header, in, 16);
   ECP *req = &header;
-
-  // clear local ECP
   ECP_OFFSET(in)->opcode = 0;
+  
+  uint8_t ready = 0;
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -263,15 +434,12 @@ void ecp(uint8_t *in) {
       // memory: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
         clear_tag(MEM, i << 10);
-
-      clear_storage();
+      evm_clear_storage();
 
       // record status
       evm_active = 1;
-
       // host tell evm to start
       *(uint8_t*)evm_cin_addr = 1;
-
       return;
     }
     else if (req->opcode == DEBUG) {
@@ -288,86 +456,29 @@ void ecp(uint8_t *in) {
       // tell hevm to stop
       evm_active = 0;
       *(char*)(evm_cin_addr + 4) = 0;
-
-      // stop copying
-      pending_evm_memory_copy_request.valid = 0;
-
+      pending_evm_memory_copy_request.valid = 0; // stop copying
       return;
     }
   }
 
-  void *addr_src, *addr_dest;
   uint32_t content_length = req->length;
 
-  // first the requests should be sent to encrypted OCM
-  if (req->src == HOST)
-    addr_src = icm_raw_data_base;
-  else
-    addr_src = data_source_to_address(req->src, req->src_offset);
-
-  if (req->dest == HOST)
-    addr_dest = icm_raw_data_base;
-  else
-    addr_dest = data_source_to_address(req->dest, req->dest_offset);
-
   if (req->opcode == COPY) {
-    if (req->src == STORAGE) {
-      // Never will happen
-    }
-    else if (req->dest == STORAGE) {
-      // fetch all kv pairs and insert to local storage
-      uint32_t* data = (uint32_t*)addr_src;
-      uint32_t numItem = data[0], offset = 1;
-
-      for (int i = 0; i < numItem; i++, offset += 16) {
-        uint32_t index = data[offset] & 0x3f;
-        uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
-        slot[0] = (data[offset] & 0xffffffc0) + 0x1;
-        for (int j = 1; j < 16; j++)
-          slot[j] = data[offset + j];
-      }
+    if (req->dest == STORAGE) {
+      evm_load_storage();
     }
     else if (req->dest == STACK) {
-      // COPY stack
-      uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-      volatile uint8_t* stackOp   = (uint8_t*)(evm_stack_addr + 0x8024);
-      uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
-
-      if (req->func == 1) {  // clear all current contents
-        for (int i = *stackSize; i; i--) {
-          // pop
-          *stackOp = 0;
-        }
-      }
-
-      // Then push
-      uint32_t numItem = *(uint32_t*)addr_src;
-      uint8_t* data = (uint8_t*)addr_src + 4;
-
-      for (int i = 0; i < numItem; i++, data += 32) {
-        memcpy_b(stackData, data, 32);
-        *stackOp = 1;
-      }
+      evm_load_stack();
     }
     else { // Memory
       if (req->src == HOST) {
-        // only copy data
-        // does not copy header
-        memcpy_b(addr_dest, addr_src, req->length);
-
-        if (req->dest != ENV) {
-          // update page table
-          uint32_t *pte = data_source_to_pte(req->dest, req->dest_offset);
-          *pte = ((uint32_t)req->dest_offset & page_tagid_mask) | 0x2;
-        }
-        
+        evm_load_memlike(req->dest, req->dest_offset, req->length);
         // if there is a pending evm_memory_copy, resume 
         if (pending_evm_memory_copy_request.valid) {
           evm_memory_copy(NULL);
         }
-      } else if (req->dest == HOST) {
-        // Never will happen
-      } else {
+      } else if (req->dest != HOST) {
+        // Interal memory copy
         evm_memory_copy(req);
       }
     }
@@ -383,41 +494,23 @@ void ecp(uint8_t *in) {
         send ecp package after recieve require tag
     */
     if (req->src == STORAGE) {
-      uint32_t* slot = (uint32_t*)(evm_storage_addr + req->src_offset);
-      uint32_t* data = (uint32_t*)addr_dest;
-
-      // commit dirty item
-      uint32_t offset = 1;
-      // copy out if valid
-      if ((slot[0] & 0x1) == 0x1) {
-        data[0] = 1;
-        // copy out to OCM if valid for better performance
-        // regardless of whether it is dirty
-        for (int i = 0; i < 16; i++)
-          data[i + 1] = slot[i];
-        uint32_t tmp = data[1] & 0xffffffc0;
-        data[1] = tmp | (req->src_offset >> 6);
-        slot[0] = slot[0] & ~0x3;  		// clean dirty bit
-        offset += 16;
-      } else {
-        data[0] = 0;
+      content_length = evm_swap_storage((uint32_t*)(evm_storage_addr + req->src_offset));
+      memcpy_b(get_output_buffer(), req, sizeof(ECP));
+      ready = icm_encrypt(sizeof(ECP) + content_length);
+      if (ready) {
+        evm_load_storage();
       }
-
-      // require missing item
-      data[offset] = 1;
-      offset++;
-      slot = (uint32_t*)(evm_storage_addr + 0xff00);
-      for (int i = 0; i < 8; i++)
-        data[i + offset] = slot[i];
-      data[offset] = (data[offset] & 0xffffffc0) | (req->src_offset >> 6);
-      offset += 8;
-      content_length = offset * 4;
     }
     else { // swap memory
       if (req->func) { // has dirty page to send back
         memcpy_b(addr_dest, addr_src, req->length);
       } else {
         content_length = 0;
+      }
+      memcpy_b(get_output_buffer(), req, sizeof(ECP));
+      ready = icm_encrypt(sizeof(ECP) + content_length);
+      if (ready) {
+        evm_load_memlike(req->src, req->dest_offset, PAGE_SIZE);
       }
     }
 
@@ -429,83 +522,34 @@ void ecp(uint8_t *in) {
     // before actually ending the run
     // print all traces
     check_debug_buffer();
+    evm_active = 0;
 
     // Send a COPY before sending END
-    uint32_t numItem = 0, offset = 1;
-    uint32_t* data = (uint32_t*)addr_dest;
-    uint32_t* slot = (uint32_t*)(evm_storage_addr);
-    for (uint32_t index = 0; index < 64; index++, slot += 16)
-      // copy out if valid
-      if ((slot[0] & 0x1) == 0x1) {
-        data[offset] = (slot[0] & 0xffffffc0) + index;
-        for (int i = 1; i < 16; i++)
-          data[offset + i] = slot[i];
-        numItem++, offset += 16;
-      }
-    data[0] = numItem;
-
     ECP *buf = (ECP *)get_output_buffer();
 
+    // COPY storage
     buf->opcode = COPY;
     buf->src = STORAGE;
     buf->dest = HOST;
     buf->src_offset = 0;
     buf->dest_offset = 0;
-    buf->length = 64 * numItem + 4;
+    buf->length = evm_store_storage();
     icm_encrypt(sizeof(ECP) + buf->length);
 
     // COPY memory
-    uint8_t* data8 = (uint8_t*)addr_dest;
-    uint8_t *memory = (uint8_t*)(evm_mem_addr);
-    for (int i = 0; i < NUMBER_OF_PAGES; i++) {
-      uint32_t pte = *data_source_to_pte(MEM, i << 10);
-      if ((pte & 2) == 0)  // empty
-        continue;
-
-      buf->opcode = COPY;
-      buf->src = MEM;
-      buf->dest = HOST;
-      buf->src_offset = pte & page_tagid_mask;
-      buf->dest_offset = 0;
-      buf->length = 1024;
-      memcpy_b(data8, memory + (i << 10), 1024);
-      icm_encrypt(sizeof(ECP) + buf->length);
-    }
+    evm_dump_memory();
 
     // COPY stack
     // the call params should remain as plaintext
     uint32_t num_of_params = num_of_end_params[req->func & 0xf]; 
-
-    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
-    uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
-    numItem = *stackSize;
-    offset = 4;
-    for (int i = numItem, count = 0, flag = 1; i; i--) {
-      // fetch the top of the stack
-      // which is always mapped to offset 0
-      memcpy_b(data8 + offset, evm_stack_addr, 32);
-      // then pop
-      *stackOp = 0;
-      count ++;
-      offset += 32;
-      if (flag && count == num_of_params || i == 1) {
-        buf->opcode = COPY;
-        buf->src = STACK;
-        buf->dest = HOST;
-        buf->func = flag;  // flag = 1 means start new transmission (clear current stack content), = 0 means continue
-        buf->src_offset = 0;
-        buf->dest_offset = 0;
-        buf->length = 32 * count + 4;
-        data[0] = count;
-        icm_encrypt(sizeof(ECP) + buf->length);
-
-        flag = 0;
-        count = 0;
-        offset = 4;
-        // only send the END params, the rest can be discarded
-        break;
-      }
-    }
+    buf->opcode = COPY;
+    buf->src = STACK;
+    buf->dest = HOST;
+    buf->func = 1;
+    buf->src_offset = 0;
+    buf->dest_offset = 0;
+    buf->length = evm_store_stack(num_of_params);
+    icm_encrypt(sizeof(ECP) + buf->length);
 
     // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
@@ -519,89 +563,51 @@ void ecp(uint8_t *in) {
     memcpy_b(data8 + 16, gas,   8);
 
     content_length = 8 * 3;
-    evm_active = 0;
+    memcpy_b(get_output_buffer(), req, sizeof(ECP));
+    icm_encrypt(sizeof(ECP) + content_length);
   }
   else if (req->opcode == CALL) {
     // before actually ending the run
     // print all traces
     check_debug_buffer();
+    evm_active = 0;
 
     // evm call to host
     // First send current environment to host
     ECP *buf = get_output_buffer();
 
     // COPY storage
-    uint32_t numItem = 0, offset = 1;
-    uint32_t* data = (uint32_t*)addr_dest;
-    uint32_t* slot = (uint32_t*)(evm_storage_addr);
-    for (uint32_t index = 0; index < 64; index++, slot += 16)
-      // copy out if valid
-      if ((slot[0] & 0x1) == 0x1) {
-        data[offset] = (slot[0] & 0xffffffc0) + index;
-        for (int i = 1; i < 16; i++)
-          data[offset + i] = slot[i];
-        numItem++, offset += 16;
-      }
-    data[0] = numItem;
-
     buf->opcode = COPY;
     buf->src = STORAGE;
     buf->dest = HOST;
     buf->src_offset = 0;
     buf->dest_offset = 0;
-    buf->length = 64 * numItem + 4;
+    buf->length = evm_store_storage();
     icm_encrypt(sizeof(ECP) + buf->length);
 
     // COPY memory
-    uint8_t* data8 = (uint8_t*)addr_dest;
-    uint8_t *memory = (uint8_t*)(evm_mem_addr);
-    for (int i = 0; i < NUMBER_OF_PAGES; i++) {
-      uint32_t pte = *data_source_to_pte(MEM, i << 10);
-      if ((pte & 2) == 0)  // empty
-        continue;
-
-      buf->opcode = COPY;
-      buf->src = MEM;
-      buf->dest = HOST;
-      buf->src_offset = pte & page_tagid_mask;
-      buf->dest_offset = 0;
-      buf->length = 1024;
-      memcpy_b(data8, memory + (i << 10), 1024);
-      icm_encrypt(sizeof(ECP) + buf->length);
-    }
+    evm_dump_memory();
 
     // COPY stack
     // the call params should remain as plaintext
-    uint32_t num_of_params = num_of_call_params[req->func & 0xf]; 
-
-    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
-    uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
-    numItem = *stackSize;
-    offset = 4;
-    for (int i = numItem, count = 0, flag = 1; i; i--) {
-      // fetch the top of the stack
-      // which is always mapped to offset 0
-      memcpy_b(data8 + offset, evm_stack_addr, 32);
-      // then pop
-      *stackOp = 0;
-      count ++;
-      offset += 32;
-      if (flag && count == num_of_params || i == 1) {
-        buf->opcode = COPY;
-        buf->src = STACK;
-        buf->dest = HOST;
-        buf->func = flag;  // flag = 1 means start new transmission (clear current stack content), = 0 means continue
-        buf->src_offset = 0;
-        buf->dest_offset = 0;
-        buf->length = 32 * count + 4;
-        data[0] = count;
-        icm_encrypt(sizeof(ECP) + buf->length);
-
-        flag = 0;
-        count = 0;
-        offset = 4;
-      }
-    }
+    uint32_t num_of_params = num_of_call_params[req->func & 0xf];
+    buf->opcode = COPY;
+    buf->src = STACK;
+    buf->dest = HOST;
+    buf->func = 1;
+    buf->src_offset = 0;
+    buf->dest_offset = 0;
+    buf->length = evm_store_stack(num_of_params);
+    icm_encrypt(sizeof(ECP) + buf->length);
+    // then the remaining content as cipher
+    buf->opcode = COPY;
+    buf->src = STACK;
+    buf->dest = HOST;
+    buf->func = 1;
+    buf->src_offset = 0;
+    buf->dest_offset = 0;
+    buf->length = evm_store_stack(-1);
+    icm_encrypt(sizeof(ECP) + buf->length);
 
     // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
@@ -615,37 +621,20 @@ void ecp(uint8_t *in) {
     memcpy_b(data8 + 16, gas,   8);
 
     content_length = 8 * 3;
-    evm_active = 0;
+    memcpy_b(get_output_buffer(), req, sizeof(ECP));
+    icm_encrypt(sizeof(ECP) + content_length);
   }
   else if (req->opcode == QUERY) {
     if (req->func == 0x1c) {  // ext code copy
-      // COPY memory
-      ECP *buf = get_output_buffer();
-      uint8_t* data8 = (uint8_t*)addr_dest;
-      uint8_t *memory = (uint8_t*)(evm_mem_addr);
-      for (int i = 0; i < NUMBER_OF_PAGES; i++) {
-        uint32_t pte = *data_source_to_pte(MEM, i << 10);
-        if ((pte & 2) == 0)  // empty
-          continue;
-
-        buf->opcode = COPY;
-        buf->src = MEM;
-        buf->dest = HOST;
-        buf->src_offset = pte & page_tagid_mask;
-        buf->dest_offset = 0;
-        buf->length = 1024;
-        memcpy_b(data8, memory + (i << 10), 1024);
-        icm_encrypt(sizeof(ECP) + buf->length);
-
-        // clear mem cache
-        *data_source_to_pte(MEM, i << 10) = 0;
-      }
+      evm_dump_memory();
     }
 
     // queries need an address (or blockid) as param
     // which is always located at the top of the stack
     content_length = 32;
     memcpy_b(addr_dest, evm_stack_addr, content_length);
+    memcpy_b(get_output_buffer(), req, sizeof(ECP));
+    icm_encrypt(sizeof(ECP) + content_length);
   }
   else if (req->opcode == LOG) {
     // [TODO] send the stack contents to host as log
@@ -654,35 +643,17 @@ void ecp(uint8_t *in) {
       *stackOp = 0;
   }
 
-  // construct header and send
-  if (req->dest == HOST) {
-    memcpy_b(get_output_buffer(), req, sizeof(ECP));
-    icm_encrypt(sizeof(ECP) + content_length);
-  }
-
   // resume execution                  | only when the evm_memory_copy is finished  
-  if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || req->opcode == LOG) {
-#ifdef SIMULATION
-      memcpy(get_output_buffer(), "activate", 8);
-      build_outgoing_packet(8);
-#endif
+  if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || ready) {
    *(char*)(evm_cin_addr + 4) = evm_active;
   }
 }
 
 void check_evm_output() {
   uint8_t *p = (uint8_t*)evm_cout_addr;
-
   if (evm_active && (ECP_OFFSET(p)->opcode != NONE)) {
     // there is an operation
     // delegate to ecp
     ecp(p);
   }
-}
-
-void clear_storage() {
-  // clear storage
-  uint32_t* slot = (uint32_t*)evm_storage_addr;
-  for (uint32_t index = 0; index < 64; index++, slot += 16)
-    slot[0] = 0;
 }

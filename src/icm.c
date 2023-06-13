@@ -188,10 +188,13 @@ uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
 ///////////////////////////////////////////////////////////////////
 
 uint8_t *ecdsa_hash(uint8_t *data, uint32_t size) {
+  /*
   sha3_context *c = &sha_inst;
   sha3_Init256(c);
   sha3_Update(c, data, size);
   return sha3_Finalize(c);
+  */
+  return NULL;
 }
 
 void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size) {
@@ -379,19 +382,25 @@ uint8_t icm_decrypt() {
   }
 }
 
-void icm_encrypt(uint32_t length) {
+uint8_t icm_encrypt(uint32_t length) {
   ECP *req = get_output_buffer();
   uint32_t content_length = length - sizeof(ECP);
 
   if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
     // do nothing
     build_outgoing_packet(length);
-  } else if (req->opcode == QUERY || req->opcode == CALL || req->opcode == END) {
+    return 1;
+  } else if (req->opcode == QUERY) {
     // plaintext params
     memcpy(req->data, icm_raw_data_base, content_length);
     build_outgoing_packet(sizeof(ECP) + content_length);
-
-    // [TODO] Store parameters in local stack to guarantee integrity
+    return 0;
+  } else if (req->opcode == CALL) {
+    // [TODO] internalize
+    return 0;
+  } else if (req->opcode == END) {
+    // [TODO] internalize
+    return 0;
   } else {
     if (req->src == STORAGE) {
       if (req->opcode == COPY) {
@@ -415,7 +424,7 @@ void icm_encrypt(uint32_t length) {
 
         // nothing to be sent out
         // and no need for integrity protection
-        return;
+        return 1;
       } else {  // req->opcode == SWAP
         void *base = icm_raw_data_base;
 
@@ -453,7 +462,7 @@ void icm_encrypt(uint32_t length) {
           memcpy(icm_raw_data_base + 4 + 32, icm_temp_storage->record[id].v, 32);
           
           ecp(&res);
-          return;
+          return 1;
         }
         
         // 1. if still not found, generate plaintext dummy requests
@@ -476,10 +485,12 @@ void icm_encrypt(uint32_t length) {
         memcpy(req->data + 8, base + 4, 32);
         build_outgoing_packet(sizeof(ECP) + content_length);
 #endif
+        return 0;
       }
     }
     else {
       // memory-like
+      // [TODO] Internalize
 
 #ifdef ENCRYPTION
       if (req->src == STACK) {
@@ -514,6 +525,7 @@ void icm_encrypt(uint32_t length) {
       memcpy(req->data, icm_raw_data_base, content_length);
 #endif
       build_outgoing_packet(sizeof(ECP) + content_length);
+      return 0;
     }
   }
 }
