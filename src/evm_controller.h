@@ -15,6 +15,16 @@ extern void* const evm_mem_addr 		  ;
 extern void* const evm_storage_addr   ;
 extern void* const evm_env_addr 		  ;
 extern void* const evm_stack_addr     ;
+
+extern void* const evm_env_stack_size;
+extern void* const evm_env_pc;
+extern void* const evm_env_gas;
+extern void* const evm_env_msize;
+extern void* const evm_env_value;
+extern void* const evm_env_code_size;
+extern void* const evm_env_calldata_size;
+extern void* const evm_env_returndata_size;
+
 extern const uint64_t pt_offset 		  ;
 extern const uint64_t page_tag_mask	  ;
 extern const uint64_t page_tagid_mask	;

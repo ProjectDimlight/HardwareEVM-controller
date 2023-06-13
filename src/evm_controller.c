@@ -41,6 +41,16 @@ void* const evm_mem_addr 		    = (void*)0x410030000ll;
 void* const evm_storage_addr 	  = (void*)0x410040000ll;
 void* const evm_env_addr 		    = (void*)0x410050000ll;
 void* const evm_stack_addr 		  = (void*)0x410060000ll;
+
+void* const evm_env_stack_size       = evm_env_addr + 0x0e * 32;
+void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
+void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
+void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
+void* const evm_env_value            = evm_env_addr + 0x14 * 32;
+void* const evm_env_code_size        = evm_env_addr + 0x18 * 32;
+void* const evm_env_calldata_size    = evm_env_addr + 0x16 * 32;
+void* const evm_env_returndata_size  = evm_env_addr + 0x1d * 32;
+
 const uint64_t pt_offset 		    = 0x8000;
 const uint64_t page_tag_mask	  = ~0xfff;
 const uint64_t page_tagid_mask	= ~0x3ff;

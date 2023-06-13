@@ -5,8 +5,10 @@
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 #define SIGNATURE_LENGTH 56
+#define PAGES(x) ((x - 1) / PAGE_SIZE + 1)
 
 #define ENCRYPTION
+// #define VERIFY_SIGNATURE
 
 // these address spaces are mapped to secure on chip memory
 void *icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
@@ -14,8 +16,17 @@ void *icm_temp_storage_base     = (void*)0xFFFD0000ll;   // temporary storage
 void *icm_config_base           = (void*)0xFFFE0000ll;   // system configuration and sensitive data
 void *icm_rt_base               = (void*)0xFFFF0000ll;   // runtime, stack and heap
 
+void *icm_ram_stack             = (void*)0x80000000ll;
+void *icm_ram_memory_sign_tmp   = (void*)0x88800000ll;
+void *icm_ram_return_tmp        = (void*)0x89000000ll;
+void *icm_ram_return_sign_tmp   = (void*)0x89800000ll;
+
 ICMTempStorage *icm_temp_storage= (ICMTempStorage*)0xFFFD0000ll;
 ICMConfig      *icm_config      = (ICMConfig*)0xFFFE0000ll;
+
+OCMStackFrame *call_frame;
+
+///////////////////////////////////////////////////////////////////
 
 uint32_t icm_hash(address_t address, uint256_t key) {
   uint32_t ad = *(uint32_t*)(address + 0);
@@ -49,6 +60,91 @@ uint32_t icm_find(uint256_t key) {
 
 ///////////////////////////////////////////////////////////////////
 
+uint32_t page_length(uint32_t length) {
+  return PAGES(length) * PAGE_SIZE;
+}
+
+uint32_t sign_length(uint32_t length) {
+  return PAGES(length) * 64;
+}
+
+void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
+  // [TODO] gas, value
+  
+  // the 0-th element in the stack is dummy header
+  // which stores immutable metadata such as ORIGIN
+  memcpy_b(&(call_frame->memory_length), evm_env_msize, 4);
+  memcpy_b(&(call_frame->stack_size), evm_env_stack_size, 4);
+  memcpy_b(&(call_frame->pc), evm_env_pc, 4);
+  
+  // copy memory signatures to stack
+  // because memory length can vary through time
+  call_frame->memory_length = last_msize; 
+  call_frame->memory_sign = call_frame->memory + page_length(last_msize);
+  memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(last_msize));
+  call_frame->top = call_frame->memory_sign + sign_length(last_msize);
+  
+  // create a new frame
+  void *base = call_frame->top;
+  call_frame++;
+  memcpy(call_frame->address, callee_address, sizeof(address_t));
+  call_frame->code_length = code_length;
+  call_frame->input_length = input_length;
+  call_frame->stack_size = 0;
+  call_frame->memory_length = 0;
+  call_frame->pc = 0;
+  call_frame->gas = gas;
+  call_frame->return_length = 0;
+  memcpy(call_frame->value, value, sizeof(uint256_t));
+
+  call_frame->code        = base;
+  call_frame->code_sign   = call_frame->code        + page_length(code_length);
+  call_frame->input       = call_frame->code_sign   + sign_length(code_length);
+  call_frame->input_sign  = call_frame->input       + page_length(input_length);
+  call_frame->stack       = call_frame->input_sign  + sign_length(input_length);
+  call_frame->stack_sign  = call_frame->stack       + 1024;
+  call_frame->memory      = call_frame->stack_sign  + 32;
+  call_frame->memory_sign = icm_ram_memory_sign_tmp;
+
+  // Set ENV
+  memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
+  memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
+  memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
+  memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
+  memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
+  memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
+  memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
+  memcpy_b(vm_env_value,                call_frame->value, 4);
+  
+  memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
+  memcpy_b(evm_env_caller,  (call_frame-1)->address, sizeof(address_t));
+}
+
+void icm_stack_pop() {
+  call_frame--;
+  
+  // Recover memory signatures from callstack
+  memcpy(icm_ram_memory_sign_tmp, call_frame->memory_sign, call_frame->top - call_frame->memory_sign);
+
+  // Recover ENV
+  memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
+  memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
+  memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
+  memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
+  memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
+  memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
+  memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
+  memcpy_b(vm_env_value,                call_frame->value, 4);
+  
+  memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
+  memcpy_b(evm_env_caller, (call_frame-1)->address, sizeof(address_t));
+}
+
+// CALL: stack_push, memcpy (last.mem -> this.input), run
+// END:  memcpy (this.mem -> returndata_tmp) , stack_pop, memcpy (returndata_tmp -> this.mem), resume
+
+///////////////////////////////////////////////////////////////////
+
 void icm_init() {
   // AES
   AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
@@ -56,6 +152,9 @@ void icm_init() {
   // ECDSA
   curve = uECC_secp224r1();
   uECC_make_key(hevm_pub, hevm_priv, curve);
+
+  // Stack
+  call_frame = icm_config->call_stack;
 }
 
 uint32_t padded_size(uint32_t size, uint32_t block_size) {
@@ -153,27 +252,22 @@ uint8_t icm_decrypt() {
     // do nothing
     return 1;
   } else if (req->opcode == CALL) {
-    // memorize the contract address
-    memcpy(icm_config->contract_address, req->data, sizeof(address_t));
-
     // check integrity, return 0 if failed, and the tx will not run
 
     // check stack hash
-    if (req->func == 0) {
-      // if start anew, the stack must be empty
-      uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
-      if (*stackSize != 0) {
-        return 0;
-      }
-    } else {
-      if (!icm_config->stack_integrity_valid) {
-        return 0;
-      }
+    // starts anew, the stack must be empty
+    uint32_t* stackSize = (uint32_t*)(evm_env_addr + 0x1c0);
+    if (*stackSize != 0) {
+      return 0;
     }
     // clear
     icm_config->stack_integrity_valid = 0;
 
     // [TODO] check merkle proof of ENV values
+
+    // check passed
+    // memorize the contract address
+    memcpy(icm_config->contract_address, req->data, sizeof(address_t));
 
     return 1;
   } else if (req->opcode == END) {
@@ -244,9 +338,11 @@ uint8_t icm_decrypt() {
 
           *(uint32_t*)icm_raw_data_base = *(uint32_t*)req->data;
           aes_decrypt_stack(icm_raw_data_base + 4, req->data + 4, req->length - 4);
+#ifdef VERIFY_SIGNATURE
           if (!ecdsa_verify(req->data + req->length, icm_raw_data_base + 4, req->length - 4, 0)) {
             return 0;
           }
+#endif
           icm_config->stack_integrity_valid = 1;
         }
       } else if (req->src == HOST && (req->dest == MEM || req->dest == OCM_MEM) && req->func == 0) {
@@ -261,9 +357,11 @@ uint8_t icm_decrypt() {
         // cipher text
         aes_decrypt(icm_raw_data_base, req->data, req->length);
         int is_user_key = req->dest == CODE || req->dest == CALLDATA;
+#ifdef VERIFY_SIGNATURE
         if (!ecdsa_verify(req->data + req->length, icm_raw_data_base + 4, req->length - 4, is_user_key)) {
           return 0;
         }
+#endif
         icm_config->stack_integrity_valid = 1;
         
         /*

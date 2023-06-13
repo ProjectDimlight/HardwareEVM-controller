@@ -17,6 +17,29 @@ enum ICMFunc{
   ICM_SET_USER_PUB
 };
 
+/*
+上一层堆栈 ][ CODE | INPUT | STACK               | MEMORY            | RETURN ] [ 下一层
+             定长    定长    变长                   变长                变长        此时上层Memory长度不会变化
+                            但最大1k               最大长度任意          由下一层决定
+                            并且不需要动态变化       按页管理，动态分配
+                            只需要一次性copy出来
+*/
+
+typedef struct __OCMStackFrame{
+  // metadata
+  address_t address;   // caller = last->address
+  uint32_t code_length, input_length, memory_length, return_length;
+  uint32_t stack_size, pc, gas;
+  uint256_t value;
+
+  // RAM pointers
+  void *code, *code_sign;
+  void *input, *input_sign;
+  void *stack, *stack_sign;
+  void *memory, *memory_sign;
+  void *top;
+} OCMStackFrame;
+
 typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
@@ -25,9 +48,9 @@ typedef struct {
   ////////////////////////////////////////////
 
   uint256_t block_hash;
-  address_t contract_address;
-
   uint8_t stack_integrity_valid;
+
+  address_t origin;
 
   ////////////////////////////////////////////
 
@@ -43,7 +66,13 @@ typedef struct {
 
   sha3_context sha_inst;
 
+  ////////////////////////////////////////////
+
+  OCMStackFrame call_stack[16];
+
 } ICMConfig;
+
+extern OCMStackFrame *call_frame;
 
 typedef struct {
   uint256_t k;
