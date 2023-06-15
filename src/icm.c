@@ -19,10 +19,10 @@ void * const icm_temp_storage_base      = (void*)0xFFFD0000ll;   // temporary st
 void * const icm_config_base            = (void*)0xFFFE0000ll;   // system configuration and sensitive data
 void * const icm_rt_base                = (void*)0xFFFF0000ll;   // runtime, stack and heap
 
-void * const icm_ram_stack              = (void*)0x80000000ll;
-void * const icm_ram_memory_sign_tmp    = (void*)0x88800000ll;
-void * const icm_ram_return_tmp         = (void*)0x89000000ll;
-void * const icm_ram_return_sign_tmp    = (void*)0x89800000ll;
+uint8_t icm_ram_stack[4096 * PAGE_SIZE];
+uint8_t icm_ram_memory_sign_tmp[64 * PAGE_SIZE];
+uint8_t icm_ram_return_tmp[4096 * PAGE_SIZE];
+uint8_t icm_ram_return_sign_tmp[64 * PAGE_SIZE];
 
 ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFD0000ll;
 ICMConfig      * const icm_config       = (ICMConfig*)0xFFFE0000ll;
@@ -72,20 +72,25 @@ uint32_t sign_length(uint32_t length) {
 }
 
 void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
-  // [TODO] gas, value
-  
-  // the 0-th element in the stack is dummy header
-  // which stores immutable metadata such as ORIGIN
-  memcpy_b(&(call_frame->memory_length), evm_env_msize, 4);
-  memcpy_b(&(call_frame->pc), evm_env_pc, 4);
-  // does not update stack size, because it has been cleared while dumping out stack elements
-  
-  // copy memory signatures to stack
-  // because memory length can vary through time
-  uint32_t real_msize = call_frame->initialized_memory_length;
-  call_frame->memory_sign = call_frame->memory + real_msize;
-  memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(real_msize));
-  call_frame->top = call_frame->memory_sign + sign_length(real_msize);
+  uint8_t init = 0;
+  if (call_frame == icm_config->call_stack) {
+    // init
+    init = 1;
+    call_frame->top = icm_ram_stack;
+  } else {
+    // the 0-th element in the stack is dummy header
+    // which stores immutable metadata such as ORIGIN
+    memcpy_b(&(call_frame->memory_length), evm_env_msize, 4);
+    memcpy_b(&(call_frame->pc), evm_env_pc, 4);
+    // does not update stack size, because it has been cleared while dumping out stack elements
+    
+    // copy memory signatures to stack
+    // because memory length can vary through time
+    uint32_t real_msize = call_frame->initialized_memory_length;
+    call_frame->memory_sign = call_frame->memory + real_msize;
+    memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(real_msize));
+    call_frame->top = call_frame->memory_sign + sign_length(real_msize);
+  }
   
   // create a new frame
   void *base = call_frame->top;
@@ -110,18 +115,19 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
   call_frame->memory      = call_frame->stack_sign  + 32;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
 
-  // Set ENV
-  memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
-  memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
-  memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
-  memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
-  memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
-  memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
-  memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
-  memcpy_b(evm_env_value,               call_frame->value, 4);
-  
-  memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
-  memcpy_b(evm_env_caller,  (call_frame-1)->address, sizeof(address_t));
+  if (!init) {
+    // Set ENV
+    memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
+    memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
+    memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
+    memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
+    memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
+    memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
+    memcpy_b(evm_env_value,               call_frame->value, 4);
+    
+    memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
+    memcpy_b(evm_env_caller,  (call_frame-1)->address, sizeof(address_t));
+  }
 }
 
 void icm_stack_pop() {
@@ -373,8 +379,11 @@ uint8_t icm_decrypt() {
     // [TODO] check merkle proof of ENV values
 
     // check passed
-    // memorize the contract address
-    memcpy(call_frame->address, req->data, sizeof(address_t));
+
+    call_frame = icm_config->call_stack;
+    memcpy_b(call_frame->address, evm_env_caller, sizeof(address_t));
+
+    icm_stack_push(NULL, 0, 0, 0, NULL);
 
     return 1;
   } else if (req->opcode == END) {
