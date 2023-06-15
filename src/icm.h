@@ -14,7 +14,16 @@ typedef uint8_t aes128_t[16];
 
 enum ICMFunc{
   ICM_CLEAR_STORAGE = 1,
-  ICM_SET_USER_PUB
+  ICM_SET_USER_PUB, 
+  ICM_SET_CONTRACT
+};
+
+enum CESMStates{
+  CESM_IDLE,
+  CESM_RECIEVED_CODE_SIZE,
+  CESM_WAIT_FOR_INPUT_COPY,
+  CESM_WAIT_FOR_RETURN_COPY,
+  CESM_WAIT_FOR_MEMORY_COPY
 };
 
 /*
@@ -29,28 +38,29 @@ typedef struct __OCMStackFrame{
   // metadata
   address_t address;   // caller = last->address
   uint32_t code_length, input_length, memory_length, return_length;
-  uint32_t stack_size, pc, gas;
+  uint32_t stack_size, pc, gas, initialized_memory_length;
   uint256_t value;
 
   // RAM pointers
-  void *code, *code_sign;
-  void *input, *input_sign;
-  void *stack, *stack_sign;
-  void *memory, *memory_sign;
-  void *top;
+  uint8_t *code, *code_sign;
+  uint8_t *input, *input_sign;
+  uint8_t *stack, *stack_sign;
+  uint8_t *memory, *memory_sign;
+  uint8_t *top;
 } OCMStackFrame;
 
 typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
   uint32_t ocm_mem_pte, ocm_immutable_pte;
+  uint8_t *immutable_page;
+  uint8_t *immutable_page_sign;
+  uint32_t immutable_page_length;
 
   ////////////////////////////////////////////
 
   uint256_t block_hash;
   uint8_t stack_integrity_valid;
-
-  address_t origin;
 
   ////////////////////////////////////////////
 
@@ -69,10 +79,14 @@ typedef struct {
   ////////////////////////////////////////////
 
   OCMStackFrame call_stack[16];
+  OCMStackFrame *call_frame_pointer;
+
+  ////////////////////////////////////////////
+
+  uint32_t cesm_current_state;
+  uint8_t call_end_func, cesm_ready;
 
 } ICMConfig;
-
-extern OCMStackFrame *call_frame;
 
 typedef struct {
   uint256_t k;
@@ -91,12 +105,12 @@ typedef struct {
   uint8_t           valid[storage_record_count];
 } ICMTempStorage;
 
-extern void *icm_raw_data_base         ;   // decrypted packet
-extern void *icm_temp_storage_base     ;   // temporary storage
-extern void *icm_storage_history_base  ;   // storage history window for dummy request generation
-extern void *icm_config_base           ;   // system configuration
-extern ICMTempStorage *icm_temp_storage;
-extern ICMConfig      *icm_config      ;
+extern void * const icm_raw_data_base         ;   // decrypted packet
+extern void * const icm_temp_storage_base     ;   // temporary storage
+extern void * const icm_storage_history_base  ;   // storage history window for dummy request generation
+extern void * const icm_config_base           ;   // system configuration
+extern ICMTempStorage * const icm_temp_storage;
+extern ICMConfig      * const icm_config      ;
 
 void icm_init();
 void icm_clear_storage();

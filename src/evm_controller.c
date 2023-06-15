@@ -386,6 +386,7 @@ void evm_memory_copy(ECP *req) {
   if (req->dest == OCM_MEM || req->dest == OCM_IMMUTABLE_MEM) {
     pte_dest = data_source_to_pte(req->dest, 0);
     sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
+    icm_step();
   }
 }
 
@@ -550,7 +551,9 @@ void ecp(uint8_t *in) {
     buf->dest_offset = 0;
     buf->length = evm_store_stack(num_of_params);
     icm_encrypt(sizeof(ECP) + buf->length);
-
+    // clear remaining elements
+    evm_clear_stack();
+    
     // then pack env variables to the CALL packet and forward the request
     // pc, msize, gas
     uint8_t* env = (uint8_t*)(evm_env_addr);
