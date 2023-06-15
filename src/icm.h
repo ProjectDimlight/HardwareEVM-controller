@@ -74,7 +74,7 @@ typedef struct {
   uint8_t hevm_pub[32], hevm_priv[32]; 
   uint8_t user_pub[32];
 
-  sha3_context sha_inst;
+  // sha3_context sha_inst;
 
   ////////////////////////////////////////////
 
@@ -114,6 +114,9 @@ extern ICMConfig      * const icm_config      ;
 
 void icm_init();
 void icm_clear_storage();
+
+void icm_step();
+void icm_call_end_state_machine();
 
 // In real implementation, the AES key should be sent as cipher text
 // and the hevm_priv_key should be generated internally

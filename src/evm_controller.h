@@ -24,6 +24,9 @@ extern void* const evm_env_value;
 extern void* const evm_env_code_size;
 extern void* const evm_env_calldata_size;
 extern void* const evm_env_returndata_size;
+extern void* const evm_env_address;
+extern void* const evm_env_caller;
+extern void* const evm_env_origin;
 
 extern const uint64_t pt_offset 		  ;
 extern const uint64_t page_tag_mask	  ;
@@ -82,8 +85,12 @@ typedef struct {
 
 extern int evm_active;
 
-void ecp(uint8_t *buf);
+void evm_memory_copy(ECP *req);
+void ecp(ECP *buf);
 void check_evm_output();
 void check_debug_buffer();
+
+void *memcpy_b(void *dst0, void *src0, uint32_t len0);
+void *memset_b(void *dst0, uint8_t val, uint32_t len0);
 
 #endif

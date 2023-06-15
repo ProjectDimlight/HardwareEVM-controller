@@ -14,18 +14,18 @@
 // #define VERIFY_SIGNATURE
 
 // these address spaces are mapped to secure on chip memory
-void * const icm_raw_data_base         = (void*)0xFFFC0000ll;   // decrypted packet
-void * const icm_temp_storage_base     = (void*)0xFFFD0000ll;   // temporary storage
-void * const icm_config_base           = (void*)0xFFFE0000ll;   // system configuration and sensitive data
-void * const icm_rt_base               = (void*)0xFFFF0000ll;   // runtime, stack and heap
+void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
+void * const icm_temp_storage_base      = (void*)0xFFFD0000ll;   // temporary storage
+void * const icm_config_base            = (void*)0xFFFE0000ll;   // system configuration and sensitive data
+void * const icm_rt_base                = (void*)0xFFFF0000ll;   // runtime, stack and heap
 
-void * const icm_ram_stack             = (void*)0x80000000ll;
-void * const icm_ram_memory_sign_tmp   = (void*)0x88800000ll;
-void * const icm_ram_return_tmp        = (void*)0x89000000ll;
-void * const icm_ram_return_sign_tmp   = (void*)0x89800000ll;
+void * const icm_ram_stack              = (void*)0x80000000ll;
+void * const icm_ram_memory_sign_tmp    = (void*)0x88800000ll;
+void * const icm_ram_return_tmp         = (void*)0x89000000ll;
+void * const icm_ram_return_sign_tmp    = (void*)0x89800000ll;
 
-ICMTempStorage *icm_temp_storage= (ICMTempStorage*)0xFFFD0000ll;
-ICMConfig      *icm_config      = (ICMConfig*)0xFFFE0000ll;
+ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFD0000ll;
+ICMConfig      * const icm_config       = (ICMConfig*)0xFFFE0000ll;
 
 uint8_t zero_page[PAGE_SIZE];
 
@@ -82,10 +82,10 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
   
   // copy memory signatures to stack
   // because memory length can vary through time
-  call_frame->memory_length = last_msize; 
-  call_frame->memory_sign = call_frame->memory + page_length(last_msize);
-  memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(last_msize));
-  call_frame->top = call_frame->memory_sign + sign_length(last_msize);
+  uint32_t real_msize = call_frame->initialized_memory_length;
+  call_frame->memory_sign = call_frame->memory + real_msize;
+  memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(real_msize));
+  call_frame->top = call_frame->memory_sign + sign_length(real_msize);
   
   // create a new frame
   void *base = call_frame->top;
@@ -118,7 +118,7 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
   memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
   memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
   memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
-  memcpy_b(vm_env_value,                call_frame->value, 4);
+  memcpy_b(evm_env_value,               call_frame->value, 4);
   
   memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
   memcpy_b(evm_env_caller,  (call_frame-1)->address, sizeof(address_t));
@@ -138,7 +138,7 @@ void icm_stack_pop() {
   memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
   memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
   memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
-  memcpy_b(vm_env_value,                call_frame->value, 4);
+  memcpy_b(evm_env_value,               call_frame->value, 4);
   
   memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
   memcpy_b(evm_env_caller, (call_frame-1)->address, sizeof(address_t));
@@ -148,20 +148,6 @@ void icm_stack_pop() {
 // END:  memcpy (this.mem -> returndata_tmp) , stack_pop, memcpy (returndata_tmp -> this.mem), resume
 
 ///////////////////////////////////////////////////////////////////
-
-void icm_init() {
-  // AES
-  AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
-  memset(zero_page, 0, sizeof(zero_page));
-  aes_encrypt(zero_page, zero_page, PAGE_SIZE);
-
-  // ECDSA
-  curve = uECC_secp224r1();
-  uECC_make_key(hevm_pub, hevm_priv, curve);
-
-  // Stack
-  call_frame = icm_config->call_stack;
-}
 
 uint32_t padded_size(uint32_t size, uint32_t block_size) {
   uint32_t number_of_blocks = ((size - 1) / block_size + 1);
@@ -214,6 +200,20 @@ int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, int is_user_key) {
 }
 
 ///////////////////////////////////////////////////////////////////
+
+void icm_init() {
+  // AES
+  AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
+  memset(zero_page, 0, sizeof(zero_page));
+  aes_encrypt(zero_page, zero_page, PAGE_SIZE);
+
+  // ECDSA
+  //curve = uECC_secp224r1();
+  //uECC_make_key(hevm_pub, hevm_priv, curve);
+
+  // Stack
+  call_frame = icm_config->call_stack;
+}
 
 void icm_clear_storage() {
   memset(icm_temp_storage->valid, 0, sizeof(icm_temp_storage->valid));
@@ -328,9 +328,9 @@ void icm_call_end_state_machine() {
       ecp.src = OCM_MEM;
       ecp.dest = OCM_IMMUTABLE_MEM;
       ecp.func = 0;
-      memcpy(&(ecp.src_offset), evm_stack + 0, 4);
+      memcpy(&(ecp.src_offset), evm_stack_addr + 0, 4);
       ecp.dest_offset = 0;
-      memcpy(&(ecp.length), evm_stack + 32, 4);
+      memcpy(&(ecp.length), evm_stack_addr + 32, 4);
       evm_memory_copy(&ecp);
       cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
     }
