@@ -71,9 +71,13 @@ uint32_t sign_length(uint32_t length) {
   return PAGES(length) * 64;
 }
 
+uint8_t icm_stack_is_root() {
+  return call_frame == icm_config->call_stack;
+}
+
 void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
   uint8_t init = 0;
-  if (call_frame == icm_config->call_stack) {
+  if (icm_stack_is_root()) {
     // init
     init = 1;
     call_frame->top = icm_ram_stack;
@@ -114,6 +118,13 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
   call_frame->stack_sign  = call_frame->stack       + 1024;
   call_frame->memory      = call_frame->stack_sign  + 32;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
+
+  for (uint32_t i = 0; i < sign_length(code_length); i += 64) {
+    call_frame->code_sign[i + 63] = 0;
+  }
+  for (uint32_t i = 0; i < sign_length(input_length); i += 64) {
+    call_frame->input_sign[i + 63] = 0;
+  }
 
   if (!init) {
     // Set ENV
@@ -383,7 +394,17 @@ uint8_t icm_decrypt() {
     call_frame = icm_config->call_stack;
     memcpy_b(call_frame->address, evm_env_caller, sizeof(address_t));
 
-    icm_stack_push(NULL, 0, 0, 0, NULL);
+    address_t address;
+    uint32_t code_length, input_length;
+    uint64_t gas;
+    uint256_t value;
+    memcpy_b(address, evm_env_address, sizeof(address_t));
+    memcpy_b(&code_length, evm_env_code_size, 4);
+    memcpy_b(&input_length, evm_env_code_size, 4);
+    memcpy_b(&gas, evm_env_code_size, 8);
+    memcpy_b(value, evm_env_code_size, sizeof(uint256_t));
+
+    icm_stack_push(address, code_length, input_length, gas, value);
 
     return 1;
   } else if (req->opcode == END) {
@@ -442,12 +463,17 @@ uint8_t icm_decrypt() {
         call_frame->code_sign[sign_length(req->dest_offset) + 63] = 1;  // mark as valid
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
-        /*
-        memcpy(get_output_buffer(), "echo", 4);
-        memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
-        build_outgoing_packet(4 + req->length);
-        */
+      } else if (req->dest == CALLDATA) { // After internalize, this will be code only
+        memcpy(call_frame->input + req->dest_offset, req->data, req->length);
+        call_frame->input_sign[sign_length(req->dest_offset) + 63] = 1;  // mark as valid
+
+        aes_decrypt(icm_raw_data_base, req->data, req->length);
       }
+      /*
+      memcpy(get_output_buffer(), "echo", 4);
+      memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
+      build_outgoing_packet(4 + req->length);
+      */
       
       return 1;
     }
@@ -630,7 +656,7 @@ uint8_t icm_encrypt(uint32_t length) {
 
         // copy back to HEVM
         if (req->opcode == SWAP) {
-          if (req->src == CODE) {
+          if (req->src == CODE || (req->src == CALLDATA && icm_stack_is_root())) {
             if (req->dest_offset >= target_page_length) {
               memset(icm_raw_data_base, 0, PAGE_SIZE);
             } else if (target_page_sign[sign_length(req->dest_offset) + 63] == 0) { // not valid
