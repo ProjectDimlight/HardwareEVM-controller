@@ -2,6 +2,7 @@
 #include "evm_controller.h"
 #include "icm_keys.h"
 
+#define ICM_DEBUG
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 #define SIGNATURE_LENGTH 56
@@ -21,13 +22,27 @@ void * const icm_rt_base                = (void*)0xFFFF0000ll;   // runtime, sta
 
 uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_memory_sign_tmp[64 * PAGE_SIZE];
-uint8_t icm_ram_return_tmp[4096 * PAGE_SIZE];
+uint8_t icm_ram_return_tmp[1024 * PAGE_SIZE];
 uint8_t icm_ram_return_sign_tmp[64 * PAGE_SIZE];
 
 ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFD0000ll;
 ICMConfig      * const icm_config       = (ICMConfig*)0xFFFE0000ll;
 
 uint8_t zero_page[PAGE_SIZE];
+
+///////////////////////////////////////////////////////////////////
+
+void icm_debug(void *data, uint32_t length) {
+  void *out = get_output_buffer();
+  uint8_t tmp[16];
+  memcpy(tmp, out, 16);
+  
+  memcpy(out, "dbug", 4);
+  memcpy(out + 4, data, length);
+  build_outgoing_packet(4 + length);
+
+  memcpy(out, tmp, 16);
+}
 
 ///////////////////////////////////////////////////////////////////
 
@@ -81,6 +96,10 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
     // init
     init = 1;
     call_frame->top = icm_ram_stack;
+
+#ifdef ICM_DEBUG
+    icm_debug("isroot", 6);
+#endif
   } else {
     // the 0-th element in the stack is dummy header
     // which stores immutable metadata such as ORIGIN
@@ -276,6 +295,9 @@ void icm_end(uint8_t func) {
   // the params are located at the front of STACK segment
   icm_config->call_end_func = func;
   cesm_state = CESM_WAIT_FOR_RETURN_COPY;
+#ifdef ICM_DEBUG
+    icm_debug("end", 3);
+#endif
 
   // copy memory as returndata
   if (func == 0x13 || func == 0x1d) {
@@ -292,10 +314,18 @@ void icm_end(uint8_t func) {
     memcpy(&(ecp.src_offset), evm_stack + 0, 4);
     ecp.dest_offset = 0;
     memcpy(&(ecp.length), evm_stack + 32, 4);
+    icm_config->immutable_page_length = ecp.length;
+
+#ifdef ICM_DEBUG
+    icm_debug(&(ecp.src_offset), 4);
+    icm_debug(&(ecp.length), 4);
+#endif
+
     evm_memory_copy(&ecp);
   } else {
     // no need for copy
     icm_config->cesm_ready = 1;
+    icm_config->immutable_page_length = 0;
   }
 }
 
@@ -323,6 +353,9 @@ void icm_call_end_state_machine() {
       evm_memory_copy(NULL);
       return;
     }
+#ifdef ICM_DEBUG
+    icm_debug("copy return ready", 17);
+#endif
 
     icm_stack_pop();
     if (call_frame == icm_config->call_stack) {
@@ -337,25 +370,35 @@ void icm_call_end_state_machine() {
       ecp->length = 0;
       build_outgoing_packet(sizeof(ECP));
       cesm_state = CESM_IDLE;
+
+#ifdef ICM_DEBUG
+    icm_debug("end", 3);
+#endif
     } else {
-      // Resume
-      // Copy results to memory
-      ECP ecp;
-      ecp.opcode = COPY;
-      ecp.src = OCM_MEM;
-      ecp.dest = OCM_IMMUTABLE_MEM;
-      ecp.func = 0;
-      memcpy(&(ecp.src_offset), evm_stack_addr + 0, 4);
-      ecp.dest_offset = 0;
-      memcpy(&(ecp.length), evm_stack_addr + 32, 4);
-      evm_memory_copy(&ecp);
       cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
+      // Resume
+      if (icm_config->immutable_page_length) {
+        // Copy results to memory
+        ECP ecp;
+        ecp.opcode = COPY;
+        ecp.src = OCM_IMMUTABLE_MEM;
+        ecp.dest = OCM_MEM;
+        ecp.func = 0;
+        ecp.src_offset = 0;
+        ecp.dest_offset = 0;
+        ecp.length = 0;
+        evm_memory_copy(&ecp);
+        icm_config->cesm_ready = 0;
+      } else {
+        icm_config->cesm_ready = 1;
+      }
     }
   } else if (cesm_state == CESM_WAIT_FOR_MEMORY_COPY) {
     // END
     // wait until copy finish
     
     // resume
+    // [TODO]
   }
 }
 
@@ -403,6 +446,12 @@ uint8_t icm_decrypt() {
     memcpy_b(&input_length, evm_env_code_size, 4);
     memcpy_b(&gas, evm_env_code_size, 8);
     memcpy_b(value, evm_env_code_size, sizeof(uint256_t));
+
+#ifdef ICM_DEBUG
+    icm_debug(address, 20);
+    icm_debug(&code_length, 4);
+    icm_debug(&input_length, 4);
+#endif
 
     icm_stack_push(address, code_length, input_length, gas, value);
 
@@ -463,7 +512,7 @@ uint8_t icm_decrypt() {
         call_frame->code_sign[sign_length(req->dest_offset) + 63] = 1;  // mark as valid
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
-      } else if (req->dest == CALLDATA) { // After internalize, this will be code only
+      } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, req->length);
         call_frame->input_sign[sign_length(req->dest_offset) + 63] = 1;  // mark as valid
 
