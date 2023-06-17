@@ -7,6 +7,8 @@
 #include "uECC.h"
 // #include "xsecure.h"
 
+#define ICM_DEBUG
+
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
 typedef uint8_t rsa2048_t[256];
@@ -111,6 +113,8 @@ extern void * const icm_storage_history_base  ;   // storage history window for 
 extern void * const icm_config_base           ;   // system configuration
 extern ICMTempStorage * const icm_temp_storage;
 extern ICMConfig      * const icm_config      ;
+
+void icm_debug(void *data, uint32_t length);
 
 void icm_init();
 void icm_clear_storage();

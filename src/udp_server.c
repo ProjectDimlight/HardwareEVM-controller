@@ -82,9 +82,9 @@ static void build_incoming_packet(struct pbuf *p) {
 static void udp_recv_packet(void *arg, struct udp_pcb *rpcb,
 		struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
-	// tpcb = rpcb;
-	// memcpy(&taddr, addr, sizeof(ip_addr_t));
-	// tport = port;
+	tpcb = rpcb;
+	memcpy(&taddr, addr, sizeof(ip_addr_t));
+	tport = port;
 
 	build_incoming_packet(p);
 	

@@ -54,6 +54,7 @@ int main(void)
     }
 
     check_evm_output();
+    icm_call_end_state_machine();
     check_debug_buffer();
 
     if (!started) {

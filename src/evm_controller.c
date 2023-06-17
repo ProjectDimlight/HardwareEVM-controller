@@ -235,7 +235,8 @@ void evm_dump_memory() {
     uint32_t pte = *data_source_to_pte(MEM, i << 10);
     if ((pte & 2) == 0)  // empty
       continue;
-
+    
+    memset(buf, 0, sizeof(ECP));
     buf->opcode = COPY;
     buf->src = MEM;
     buf->dest = HOST;
@@ -290,6 +291,7 @@ uint8_t async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_
 
   if (ready) {
     evm_load_memlike(src, dest_offset);
+    pending_evm_memory_copy_request.valid = 0;
   }
   return ready;
 }
@@ -327,13 +329,16 @@ void evm_memory_copy(ECP *req) {
   uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
-    /*
-    memcpy_b(get_output_buffer()   , "step", 4);
-    memcpy_b(get_output_buffer()+ 4, &(req->src_offset), 4);
-    memcpy_b(get_output_buffer()+ 8, &(req->dest_offset), 4);
-    memcpy_b(get_output_buffer()+12, &(req->length), 4);
-    build_outgoing_packet(16);
-    */
+#ifdef ICM_DEBUG
+/*
+    uint8_t tmp[16];
+    memcpy_b(tmp     , "step", 4);
+    memcpy_b(tmp + 4 , &(req->src_offset), 4);
+    memcpy_b(tmp + 8 , &(req->dest_offset), 4);
+    memcpy_b(tmp + 12, &(req->length), 4);
+    icm_debug(tmp, 16);
+*/
+#endif
     
     // before page
     addr_src = data_source_to_address(req->src, req->src_offset);
@@ -529,6 +534,10 @@ void ecp(ECP *in) {
     check_debug_buffer();
     evm_active = 0;
 
+#ifdef ICM_DEBUG
+  icm_debug("dump debug", 10);
+#endif
+
     // Send a COPY before sending END
     ECP *buf = (ECP *)get_output_buffer();
 
@@ -541,8 +550,16 @@ void ecp(ECP *in) {
     buf->length = evm_store_storage();
     icm_encrypt(sizeof(ECP) + buf->length);
 
+#ifdef ICM_DEBUG
+  icm_debug("dump storage", 12);
+#endif
+
     // COPY memory
     evm_dump_memory();
+    
+#ifdef ICM_DEBUG
+  icm_debug("dump memory", 11);
+#endif
 
     // COPY stack
     // the call params should remain as plaintext
@@ -558,6 +575,10 @@ void ecp(ECP *in) {
     // clear remaining elements
     evm_clear_stack();
     
+#ifdef ICM_DEBUG
+  icm_debug("dump stack", 10);
+#endif
+
     // end
     content_length = 0;
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
@@ -633,6 +654,9 @@ void ecp(ECP *in) {
   // resume execution                  | only when the evm_memory_copy is finished  
   if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || ready) {
    *(char*)(evm_cin_addr + 4) = evm_active;
+#ifdef ICM_DEBUG
+  icm_debug("cont", 4);
+#endif
   }
 }
 
