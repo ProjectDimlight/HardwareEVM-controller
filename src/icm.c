@@ -483,6 +483,16 @@ void icm_call_end_state_machine() {
 
     uint8_t end_func = call_frame->call_end_func;
     icm_stack_pop();
+
+    if (call_frame->call_end_func == CREATE || call_frame->call_end_func == CREATE2) {
+#ifdef ICM_DEBUG
+    icm_debug("deploy", 6);
+#endif
+      // The return value is the code to be deployed
+      // [TODO] hash the code to get address
+      // [TODO] then deploy locally
+    }
+
     if (icm_stack_is_empty()) {
       // Finish
       ECP *ecp = get_output_buffer();
@@ -499,10 +509,6 @@ void icm_call_end_state_machine() {
 #ifdef ICM_DEBUG
     icm_debug("idle", 4);
 #endif
-    } else if (call_frame->call_end_func == CREATE || call_frame->call_end_func == CREATE2) {
-      // The return value is the code to be deployed
-      // [TODO] hash the code to get address
-      // [TODO] then deploy locally
     } else {
       // Resume
       cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
