@@ -56,6 +56,20 @@ enum DebugFunc {
   DEBUG_TRACE_DATA
 };
 
+enum CallEndFunc {
+  STOP = 0x00,
+  RESUME = 0x01,
+  CREATE = 0x10,
+  CALL,
+  CALLCODE,
+  RETURN,
+  DELEGATECALL,
+  CREATE2,
+  STATICCALL = 0x1a,
+  REVERT = 0x1d,
+  SELFDESTRUCT = 0x1f
+};
+
 enum DataSource {
   CONTROL,
   CODE,
@@ -86,7 +100,7 @@ typedef struct {
 extern int evm_active;
 
 void evm_memory_copy(ECP *req);
-void ecp(ECP *buf);
+void handle_ecp(ECP *buf);
 void check_evm_output();
 void check_debug_buffer();
 

@@ -44,7 +44,7 @@ int main(void)
 
     uint8_t *p = check_incoming_packet();
     if (p) {
-      ecp(p);
+      handle_ecp(p);
       /*
       if (!started) {
         test_malloc();

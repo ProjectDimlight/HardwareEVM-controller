@@ -35,7 +35,7 @@ void initial() {
   data8[32] = 2;
   data8[64] = 3;
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);
@@ -50,7 +50,7 @@ void initial() {
   req->dest_offset = 0;
   req->length = 0;
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);
@@ -70,7 +70,7 @@ void init_code() {
 
   memcpy(addr_src, code, sizeof(code));
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);
@@ -91,7 +91,7 @@ void init_mem() {
   for (int i = 0; i < 1024; i++)
     ((uint8_t*)addr_src)[i] = 0;
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);
@@ -112,7 +112,7 @@ void init_calldata() {
   for (int i = 0; i < 64; i++)
     ((uint8_t*)addr_src)[i] = i;
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);
@@ -130,7 +130,7 @@ void init_calldata() {
   *(int*)addr_src = 0xe;
   *(int*)(addr_src + 4) = 0;
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   // wait
   for (int i = 0; i < delay; i++);
@@ -170,7 +170,7 @@ void long_jump_contract_miss() {
     ((uint8_t*)addr_src)[i] = 0;
   memcpy(addr_src + 0x6, code + 0x89, 0x92 - 0x89);
 
-  ecp(sim_ram);
+  handle_ecp(sim_ram);
 
   echo_length = 16 + req->length;
   memcpy(buf_out, buf_in, echo_length);

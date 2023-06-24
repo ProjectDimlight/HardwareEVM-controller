@@ -144,9 +144,9 @@ void evm_load_stack(uint8_t func) {
 
   // Then push
   uint32_t numItem = *(uint32_t*)addr_src;
-  uint8_t* data = (uint8_t*)addr_src + 4;
+  uint8_t* data = (uint8_t*)addr_src + 4 + (numItem - 1) * 32;
 
-  for (int i = 0; i < numItem; i++, data += 32) {
+  for (int i = 0; i < numItem; i++, data -= 32) {
     memcpy_b(stackData, data, 32);
     *stackOp = 1;
   }
@@ -159,8 +159,8 @@ uint32_t evm_store_storage() {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
   uint32_t* slot = (uint32_t*)evm_storage_addr;
   for (uint32_t index = 0; index < 64; index++, slot += 16)
-    // copy out if valid
-    if ((slot[0] & 0x1) == 0x1) {
+    // copy out if valid and dirty
+    if ((slot[0] & 0x3) == 0x3) {
       data[offset] = (slot[0] & 0xffffffc0) + index;
       for (int i = 1; i < 16; i++)
         data[offset + i] = slot[i];
@@ -191,8 +191,8 @@ uint32_t evm_swap_storage(uint32_t *slot) {
 
   // commit dirty item
   uint32_t offset = 1;
-  // copy out if valid
-  if ((slot[0] & 0x1) == 0x1) {
+  // copy out if valid & dirty
+  if ((slot[0] & 0x3) == 0x3) {
     data[0] = 1;
     // copy out to OCM if valid for better performance
     // regardless of whether it is dirty
@@ -421,7 +421,7 @@ void check_debug_buffer() {
   }
 }
 
-void ecp(ECP *in) {
+void handle_ecp(ECP *in) {
   ECP header;
   memcpy(&header, in, 16);
   ECP *req = &header;
@@ -665,6 +665,6 @@ void check_evm_output() {
   if (evm_active && p->opcode != NONE) {
     // there is an operation
     // delegate to ecp
-    ecp(p);
+    handle_ecp(p);
   }
 }

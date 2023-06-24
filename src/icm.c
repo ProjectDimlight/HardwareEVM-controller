@@ -6,6 +6,7 @@
 #define PAGE_SIZE 1024
 #define SIGNATURE_LENGTH 56
 #define PAGES(x) ((x - 1) / PAGE_SIZE + 1)
+#define SELF_ADDRESS ((call_frame + 1)->address)
 
 #define call_frame (icm_config->call_frame_pointer)
 #define cesm_state (icm_config->cesm_current_state)
@@ -93,9 +94,12 @@ uint8_t icm_stack_is_root() {
   return call_frame == icm_config->call_stack + 1;
 }
 
-void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
+void icm_stack_push(address_t callee_address, address_p callee_storage_address, address_p callee_caller_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
   uint8_t init = 0;
   if (icm_stack_is_empty()) {
+    // the 0-th element in the stack is dummy header
+    // which stores immutable metadata such as ORIGIN
+
     // init
     init = 1;
     call_frame->top = icm_ram_stack;
@@ -104,32 +108,32 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
     icm_debug("isroot", 6);
 #endif
   } else {
-    // the 0-th element in the stack is dummy header
-    // which stores immutable metadata such as ORIGIN
-    memcpy_b(&(call_frame->memory_length), evm_env_msize, 4);
     memcpy_b(&(call_frame->pc), evm_env_pc, 4);
+    memcpy_b(&(call_frame->msize), evm_env_msize, 4);
+    memcpy_b(&(call_frame->gas), evm_env_gas, 4);
     // does not update stack size, because it has been cleared while dumping out stack elements
     
     // copy memory signatures to stack
     // because memory length can vary through time
-    uint32_t real_msize = call_frame->initialized_memory_length;
-    call_frame->memory_sign = call_frame->memory + real_msize;
-    memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(real_msize));
-    call_frame->top = call_frame->memory_sign + sign_length(real_msize);
+    call_frame->memory_sign = call_frame->memory + call_frame->memory_length;
+    memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(call_frame->memory_length));
+    call_frame->top = call_frame->memory_sign + sign_length(call_frame->memory_length);
   }
   
   // create a new frame
   void *base = call_frame->top;
   call_frame++;
   memcpy(call_frame->address, callee_address, sizeof(address_t));
+  call_frame->storage_address = callee_storage_address;
+  call_frame->caller_address = callee_caller_address;
   call_frame->code_length = code_length;
   call_frame->input_length = input_length;
-  call_frame->stack_size = 0;
   call_frame->memory_length = 0;
-  call_frame->initialized_memory_length = 0;
+  call_frame->return_length = 0;
+  call_frame->stack_size = 0;
+  call_frame->msize = 0;
   call_frame->pc = 0;
   call_frame->gas = gas;
-  call_frame->return_length = 0;
   memcpy(call_frame->value, value, sizeof(uint256_t));
 
   call_frame->code        = base;
@@ -152,14 +156,14 @@ void icm_stack_push(address_t callee_address, uint32_t code_length, uint32_t inp
     // Set ENV
     memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
     memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
-    memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
+    memcpy_b(evm_env_msize,             &(call_frame->msize), 4);
     memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
     memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
     memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
     memcpy_b(evm_env_value,               call_frame->value, 4);
     
     memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
-    memcpy_b(evm_env_caller,  (call_frame-1)->address, sizeof(address_t));
+    memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
   }
 }
 
@@ -173,8 +177,8 @@ void icm_stack_pop() {
     // Recover ENV
     memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
     memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
-    memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
-    memcpy_b(evm_env_msize,             &(call_frame->memory_length), 4);
+    // memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
+    memcpy_b(evm_env_msize,             &(call_frame->msize), 4);
     memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
     memcpy_b(evm_env_gas,               &(call_frame->gas), 4);
     memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
@@ -243,6 +247,9 @@ int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, int is_user_key) {
 ///////////////////////////////////////////////////////////////////
 
 void icm_init() {
+  // ZERO
+  memset(icm_config->zero, 0, 64);
+
   // AES
   AES_init_ctx_iv(&(icm_config->aes_inst), user_aes, iv);
   memset(zero_page, 0, sizeof(zero_page));
@@ -287,31 +294,45 @@ void icm_record_history() {
 
 ///////////////////////////////////////////////////////////////////
 
-void icm_call() {
+void icm_call(uint8_t func) {
   // CALL
-  // fetch params
+  // get next level code size
+  call_frame->call_end_func = func;
+  uint8_t *evm_stack = call_frame->stack;
+  cesm_state = CESM_WAIT_FOR_CODE_SIZE;
 
-  // send ICM_SET_CONTRACT
+  if (func == CREATE || func == CREATE2) {
+    // CREATE: code is local, calldata is none
+    icm_config->cesm_ready = 1;
+    icm_config->immutable_page_length = *(uint32_t*)(evm->stack + 64);  // size
+  } else {
+    // call target address, query from host
+    // send ICM_SET_CONTRACT
+    ECP *ecp = get_output_buffer();
+    ecp->opcode = END;
+    ecp->src = CONTROL;
+    ecp->dest = HOST;
+    ecp->func = func;
+    ecp->src_offset = 0;
+    ecp->dest_offset = 0;
+    ecp->length = sizeof(address_t);
+    memcpy(ecp->data, evm_stack + 32, sizeof(address_t));
+    build_outgoing_packet(sizeof(ECP));
+
+    icm_config->cesm_ready = 0;
+  }
 }
 
 void icm_end(uint8_t func) {
   // END
   // fetch params
   // the params are located at the front of STACK segment
-  icm_config->call_end_func = func;
+  call_frame->call_end_func = func;
+  uint8_t *evm_stack = call_frame->stack;
   cesm_state = CESM_WAIT_FOR_RETURN_COPY;
-#ifdef ICM_DEBUG
-    icm_debug("end", 3);
-
-    uint8_t a[1024];
-    memcpy(a, call_frame->memory, 1024);
-    aes_decrypt(a, a, 1024);
-    icm_debug(a, 1024);
-#endif
 
   // copy memory as returndata
-  if (func == 0x13 || func == 0x1d) {
-    uint8_t *evm_stack = call_frame->stack;
+  if (func == RETURN || func == REVERT) {
     icm_config->cesm_ready = 0;
     icm_config->immutable_page = icm_ram_return_tmp;
     icm_config->immutable_page_sign = icm_ram_return_sign_tmp;
@@ -321,9 +342,9 @@ void icm_end(uint8_t func) {
     ecp.src = OCM_MEM;
     ecp.dest = OCM_IMMUTABLE_MEM;
     ecp.func = 0;
-    memcpy(&(ecp.src_offset), evm_stack + 0, 4);
+    ecp.src_offset = *(uint32_t*)(evm_stack + 0);
     ecp.dest_offset = 0;
-    memcpy(&(ecp.length), evm_stack + 32, 4);
+    ecp.length = *(uint32_t*)(evm_stack + 32);
     icm_config->immutable_page_length = ecp.length;
 
 #ifdef ICM_DEBUG
@@ -347,15 +368,108 @@ void icm_call_end_state_machine() {
   if (cesm_state == CESM_IDLE) {
     // do nothing
     icm_config->cesm_ready = 0;
-  } else if (cesm_state == CESM_RECIEVED_CODE_SIZE) {
+  } else if (cesm_state == CESM_WAIT_FOR_CODE_SIZE) {
     // CALL
+    // wait until code size is received
+    if (icm_config->cesm_ready == 0) {
+      evm_memory_copy(NULL);
+      return;
+    }
+    // the code length is set
+#ifdef ICM_DEBUG
+    icm_debug("code size received", 18);
+#endif
+
+    uint8_t *evm_stack = call_frame->stack;
+    uint64_t gas;
+    address_p callee_address, callee_storage_address, callee_caller_address;
+    uint8_t *value;
+    uint32_t code_length, input_length, offset, size;
+
+    if (call_frame->call_end_func == CALL || call_frame->call_end_func == CALLCODE) {
+      gas = *(uint64_t*)(evm_stack);
+      callee_address = evm_stack + 32;
+      callee_storage_address = (call_frame->call_end_func == CALLCODE ? call_frame->address : SELF_ADDRESS);
+      callee_caller_address = call_frame->address;
+      value = evm_stack + 64;
+      code_length = icm_config->ext_code_size;
+      input_length = *(uint32_t*)(evm_stack + 32 * 4);
+      offset = *(uint32_t*)(evm_stack + 32 * 3);
+      size = *(uint32_t*)(evm_stack + 32 * 4);
+      call_frame->ret_offset = *(uint32_t*)(evm_stack + 32 * 5);
+      call_frame->ret_size = *(uint32_t*)(evm_stack + 32 * 6);
+    } else if (call_frame->call_end_func == DELEGATECALL || call_frame->call_end_func == STATICCALL) {
+      gas = *(uint64_t*)(evm_stack);
+      callee_address = evm_stack + 32;
+      callee_storage_address = (call_frame->call_end_func == DELEGATECALL ? call_frame->address : SELF_ADDRESS);
+      callee_caller_address = (call_frame->call_end_func == DELEGATECALL ? call_frame->caller_address : call_frame->address);
+      value = (call_frame->call_end_func == DELEGATECALL ? call_frame->value : icm_config->zero);
+      code_length = icm_config->ext_code_size;
+      input_length = *(uint32_t*)(evm_stack + 32 * 3);
+      offset = *(uint32_t*)(evm_stack + 32 * 2);
+      size = *(uint32_t*)(evm_stack + 32 * 3);
+      call_frame->ret_offset = *(uint32_t*)(evm_stack + 32 * 4);
+      call_frame->ret_size = *(uint32_t*)(evm_stack + 32 * 5);
+    } else { // CREATE, CREATE2
+      gas = *(uint64_t*)evm_env_gas;
+      callee_address = icm_config->zero;
+      callee_storage_address = SELF_ADDRESS;
+      callee_caller_address = call_frame->address;
+      value = *(uint32_t)(evm_stack);
+      code_length = icm_config->immutable_page_length;
+      input_length = 0;
+      offset = *(uint32_t)(evm_stack + 32);
+      size = *(uint32_t)(evm_stack + 32);
+      call_frame->ret_offset = 0;
+      call_frame->ret_size = 0;
+    }
+
     // stack push
-    // copy memory as input
+    icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value);
+
+    // copy memory as code (CREATE) or input (CALL)
+    if (func == CREATE || func == CREATE2) {  
+      icm_config->immutable_page = call_frame->code;
+      icm_config->immutable_page_sign = call_frame->code_sign;
+      icm_config->immutable_page_sign = call_frame->code_length;
+    } else {
+      icm_config->immutable_page = call_frame->input;
+      icm_config->immutable_page_sign = call_frame->input_sign;  
+      icm_config->immutable_page_sign = call_frame->input_length;
+    }
+    ECP ecp;
+    ecp.opcode = COPY;
+    ecp.src = OCM_MEM;
+    ecp.dest = OCM_IMMUTABLE_MEM;
+    ecp.func = 0;
+    ecp.src_offset = offset;
+    ecp.dest_offset = 0;
+    ecp.length = size;
+    cesm_state = CESM_IDLE;
+    evm_memory_copy(&ecp);
+    cesm_state = CESM_WAIT_FOR_INPUT_COPY;
   } else if (cesm_state == CESM_WAIT_FOR_INPUT_COPY) {
     // CALL
     // wait until copy finish
+    if (icm_config->cesm_ready == 0) {
+      evm_memory_copy(NULL);
+      return;
+    }
+#ifdef ICM_DEBUG
+    icm_debug("copy input/code ready", 17);
+#endif
 
     // start
+    ECP ecp;
+    ecp.opcode = CALL;
+    ecp.src = HOST;
+    ecp.dest = CONTROL;
+    ecp.func = (call_frame - 1)->call_end_func;
+    ecp.src_offset = 0;
+    ecp.dest_offset = 0;
+    ecp.length = 0;
+    cesm_state = CESM_IDLE;
+    handle_ecp(&ecp);
   } else if (cesm_state == CESM_WAIT_FOR_RETURN_COPY) {
     // END
     // wait until copy finish
@@ -367,6 +481,7 @@ void icm_call_end_state_machine() {
     icm_debug("copy return ready", 17);
 #endif
 
+    uint8_t end_func = call_frame->call_end_func;
     icm_stack_pop();
     if (icm_stack_is_empty()) {
       // Finish
@@ -374,7 +489,7 @@ void icm_call_end_state_machine() {
       ecp->opcode = END;
       ecp->src = CONTROL;
       ecp->dest = HOST;
-      ecp->func = icm_config->call_end_func;
+      ecp->func = end_func;
       ecp->src_offset = 0;
       ecp->dest_offset = 0;
       ecp->length = icm_config->immutable_page_length;
@@ -384,9 +499,13 @@ void icm_call_end_state_machine() {
 #ifdef ICM_DEBUG
     icm_debug("idle", 4);
 #endif
+    } else if (call_frame->call_end_func == CREATE || call_frame->call_end_func == CREATE2) {
+      // The return value is the code to be deployed
+      // [TODO] hash the code to get address
+      // [TODO] then deploy locally
     } else {
-      cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
       // Resume
+      cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
       if (icm_config->immutable_page_length) {
         // Copy results to memory
         ECP ecp;
@@ -395,8 +514,8 @@ void icm_call_end_state_machine() {
         ecp.dest = OCM_MEM;
         ecp.func = 0;
         ecp.src_offset = 0;
-        ecp.dest_offset = 0;
-        ecp.length = 0;
+        ecp.dest_offset = call_frame->ret_offset;
+        ecp.length = call_frame->ret_size;
         evm_memory_copy(&ecp);
         icm_config->cesm_ready = 0;
       } else {
@@ -406,9 +525,37 @@ void icm_call_end_state_machine() {
   } else if (cesm_state == CESM_WAIT_FOR_MEMORY_COPY) {
     // END
     // wait until copy finish
-    
+    if (icm_config->cesm_ready == 0) {
+      evm_memory_copy(NULL);
+      return;
+    }
+#ifdef ICM_DEBUG
+    icm_debug("copy return ready", 17);
+#endif
+
+    // Copy back EVM stack
+    *(uint32_t*)icm_raw_data_base = call_frame->stack_size + 1;
+    if (call_frame->call_end_func == CREATE || call_frame->call_end_func == CREATE2) {
+      // [TODO] set address
+    } else {
+      // set success
+      memset(icm_raw_data_base + 4, 0, 32);
+      *(uint8_t*)(icm_raw_data_base + 4) = (call_frame + 1)->call_end_func != REVERT;
+    }
+    aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack, 32 * call_frame->stack_size);
+    evm_load_stack(1);
+
     // resume
-    // [TODO]
+    ECP ecp;
+    ecp.opcode = CALL;
+    ecp.src = HOST;
+    ecp.dest = CONTROL;
+    ecp.func = RESUME;
+    ecp.src_offset = 0;
+    ecp.dest_offset = 0;
+    ecp.length = 0;
+    cesm_state = CESM_IDLE;
+    handle_ecp(&ecp);
   }
 }
 
@@ -420,8 +567,8 @@ uint8_t icm_decrypt() {
       icm_clear_storage();
     } else if (req->func == ICM_SET_USER_PUB) {
       // uECC_decompress(req->data, icm_config->user_pub, uECC_secp224r1());
-      // icm_init();
     } else if (req->func == ICM_SET_CONTRACT) {
+      icm_config->ext_code_size = *(uint32_t*)req->length;
       icm_step();
     }
     return 0;
@@ -441,9 +588,12 @@ uint8_t icm_decrypt() {
     // [TODO] check merkle proof of ENV values
 
     // check passed
-
     call_frame = icm_config->call_stack;
+
     memcpy_b(call_frame->address, evm_env_caller, sizeof(address_t));
+    call_frame->storage_address = call_frame->address;
+    call_frame->caller_address = icm_config->zero;
+    call_frame->call_end_func = req->func;
 
 #ifdef ICM_DEBUG
     icm_debug("load", 4);
@@ -465,7 +615,7 @@ uint8_t icm_decrypt() {
     icm_debug(&input_length, 4);
 #endif
 
-    icm_stack_push(address, code_length, input_length, gas, value);
+    icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value);
 
     return 1;
   } else if (req->opcode == END) {
@@ -562,7 +712,7 @@ uint8_t icm_encrypt(uint32_t length) {
     build_outgoing_packet(sizeof(ECP) + content_length);
     return 0;
   } else if (req->opcode == CALL) {
-    // [TODO] internalize
+    icm_call(req->func);
     return 0;
   } else if (req->opcode == END) {
     icm_end(req->func);
@@ -627,7 +777,7 @@ uint8_t icm_encrypt(uint32_t length) {
           memcpy(icm_raw_data_base, base, 4 + 32);
           memcpy(icm_raw_data_base + 4 + 32, icm_temp_storage->record[id].v, 32);
           
-          ecp(&res);
+          handle_ecp(&res);
           return 1;
         }
         
@@ -670,12 +820,12 @@ uint8_t icm_encrypt(uint32_t length) {
           if (cesm_state == CESM_WAIT_FOR_INPUT_COPY) {
             target_page = (call_frame - 1)->memory;
             target_page_sign = (call_frame - 1)->memory_sign;
-            target_page_length = (call_frame - 1)->initialized_memory_length;
+            target_page_length = (call_frame - 1)->memory_length;
             target_frame = (call_frame - 1);
           } else {
             target_page = call_frame->memory;
             target_page_sign = call_frame->memory_sign;
-            target_page_length = call_frame->initialized_memory_length;
+            target_page_length = call_frame->memory_length;
             target_frame = call_frame;
           }
         } else if (req->src == OCM_IMMUTABLE_MEM) {
@@ -693,18 +843,18 @@ uint8_t icm_encrypt(uint32_t length) {
         } else if (req->src == MEM) {
           target_page = call_frame->memory;
           target_page_sign = call_frame->memory_sign;
-          target_page_length = call_frame->initialized_memory_length;
+          target_page_length = call_frame->memory_length;
           target_frame = call_frame;
         }
 
         // copy to call_stack
         if (content_length) {
           if (req->src == MEM || req->src == OCM_MEM) {
-            for (; target_frame->initialized_memory_length < req->src_offset; target_frame->initialized_memory_length += PAGE_SIZE) {
-              memcpy(target_page + target_frame->initialized_memory_length, zero_page, PAGE_SIZE);
+            for (; target_frame->memory_length < req->src_offset; target_frame->memory_length += PAGE_SIZE) {
+              memcpy(target_page + target_frame->memory_length, zero_page, PAGE_SIZE);
             }
             // and the copied out page
-            target_page_length = target_frame->initialized_memory_length += PAGE_SIZE;
+            target_page_length = target_frame->memory_length += PAGE_SIZE;
           }
           uint32_t cipher_length = aes_encrypt(target_page + req->src_offset, icm_raw_data_base, content_length);
           if (req->src == OCM_IMMUTABLE_MEM && cesm_state == CESM_WAIT_FOR_RETURN_COPY) {

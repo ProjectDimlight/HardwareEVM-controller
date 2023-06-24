@@ -11,6 +11,7 @@
 
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
+typedef uint8_t *address_p;
 typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
 
@@ -22,7 +23,7 @@ enum ICMFunc{
 
 enum CESMStates{
   CESM_IDLE,
-  CESM_RECIEVED_CODE_SIZE,
+  CESM_WAIT_FOR_CODE_SIZE,
   CESM_WAIT_FOR_INPUT_COPY,
   CESM_WAIT_FOR_RETURN_COPY,
   CESM_WAIT_FOR_MEMORY_COPY
@@ -38,10 +39,13 @@ enum CESMStates{
 
 typedef struct __OCMStackFrame{
   // metadata
-  address_t address;   // caller = last->address
+  address_t address;            // caller = last->address
+  address_p storage_address;    // for DELEGATECALL and CALLCODE
+  address_p caller_address;     // for DELEGATECALL
   uint32_t code_length, input_length, memory_length, return_length;
-  uint32_t stack_size, pc, gas, initialized_memory_length;
+  uint32_t stack_size, ret_offset, ret_size, pc, msize, gas;
   uint256_t value;
+  uint8_t call_end_func;
 
   // RAM pointers
   uint8_t *code, *code_sign;
@@ -58,6 +62,7 @@ typedef struct {
   uint8_t *immutable_page;
   uint8_t *immutable_page_sign;
   uint32_t immutable_page_length;
+  uint32_t ext_code_size;
 
   ////////////////////////////////////////////
 
@@ -75,6 +80,7 @@ typedef struct {
   uECC_Curve curve;
   uint8_t hevm_pub[32], hevm_priv[32]; 
   uint8_t user_pub[32];
+  uint8_t zero[64];
 
   // sha3_context sha_inst;
 
@@ -86,7 +92,7 @@ typedef struct {
   ////////////////////////////////////////////
 
   uint32_t cesm_current_state;
-  uint8_t call_end_func, cesm_ready;
+  uint8_t  cesm_ready;
 
 } ICMConfig;
 
