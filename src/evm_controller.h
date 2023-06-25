@@ -57,17 +57,17 @@ enum DebugFunc {
 };
 
 enum CallEndFunc {
-  STOP = 0x00,
-  RESUME = 0x01,
-  CREATE = 0x10,
-  CALL,
-  CALLCODE,
-  RETURN,
-  DELEGATECALL,
-  CREATE2,
-  STATICCALL = 0x1a,
-  REVERT = 0x1d,
-  SELFDESTRUCT = 0x1f
+  OP_STOP = 0x00,
+  OP_RESUME = 0x01,
+  OP_CREATE = 0x10,
+  OP_CALL,
+  OP_CALLCODE,
+  OP_RETURN,
+  OP_DELEGATECALL,
+  OP_CREATE2,
+  OP_STATICCALL = 0x1a,
+  OP_REVERT = 0x1d,
+  OP_SELFDESTRUCT = 0x1f
 };
 
 enum DataSource {
