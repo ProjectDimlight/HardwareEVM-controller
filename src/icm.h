@@ -45,7 +45,7 @@ typedef struct __OCMStackFrame{
   uint32_t code_length, input_length, memory_length, return_length;
   uint32_t stack_size, ret_offset, ret_size, pc, msize, gas;
   uint256_t value;
-  uint8_t call_end_func;
+  uint8_t call_end_func, num_of_params;
 
   // RAM pointers
   uint8_t *code, *code_sign;

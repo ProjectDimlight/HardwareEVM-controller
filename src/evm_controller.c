@@ -621,7 +621,7 @@ void handle_ecp(ECP *in) {
     buf->opcode = COPY;
     buf->src = STACK;
     buf->dest = HOST;
-    buf->func = 1;
+    buf->func = 0;
     buf->src_offset = 0;
     buf->dest_offset = 0;
     buf->length = evm_store_stack(-1);
