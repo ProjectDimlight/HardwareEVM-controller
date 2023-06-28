@@ -61,12 +61,12 @@ uint32_t icm_hash(address_t address, uint256_t key) {
 // for insertion, use this as the new index
 // for query, 
 uint32_t icm_find(uint256_t key) {
-  uint32_t hash = icm_hash(call_frame->address, key);
+  uint32_t hash = icm_hash(call_frame->storage_address, key);
   uint32_t cnt = 0;
   for (;
       cnt < storage_prime &&
       icm_temp_storage->valid[hash] && (
-      memcmp(icm_temp_storage->record[hash].a, call_frame->address, sizeof(address_t)) != 0 ||
+      memcmp(icm_temp_storage->record[hash].a, call_frame->storage_address, sizeof(address_t)) != 0 ||
       memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
     hash = (hash + 1) % storage_prime, cnt++);
 
@@ -323,9 +323,15 @@ void icm_call(uint8_t func) {
     ecp->func = ICM_SET_CONTRACT;
     ecp->src_offset = 0;
     ecp->dest_offset = 0;
-    ecp->length = sizeof(address_t);
+    ecp->length = sizeof(address_t) * 2;
     memcpy(ecp->data, evm_stack + 32, sizeof(address_t));
-    build_outgoing_packet(sizeof(ECP) + 20);
+    if (func == OP_CALLCODE || func == OP_DELEGATECALL) {
+      // delegatecall use caller's storage
+      memcpy(ecp->data + sizeof(address_t), call_frame->address, sizeof(address_t));
+    } else {
+      memcpy(ecp->data + sizeof(address_t), evm_stack + 32, sizeof(address_t));
+    }
+    build_outgoing_packet(sizeof(ECP) + ecp->length);
 
     icm_config->cesm_ready = 0;
   }
@@ -603,9 +609,10 @@ void icm_call_end_state_machine() {
       ecp->func = ICM_SET_CONTRACT;
       ecp->src_offset = 0;
       ecp->dest_offset = 0;
-      ecp->length = sizeof(address_t);
+      ecp->length = sizeof(address_t) * 2;
       memcpy(ecp->data, call_frame->address, sizeof(address_t));
-      build_outgoing_packet(sizeof(ECP) + 20);
+      memcpy(ecp->data + sizeof(address_t), call_frame->storage_address, sizeof(address_t));
+      build_outgoing_packet(sizeof(ECP) + ecp->length);
     }
 
     // resume
@@ -798,7 +805,7 @@ uint8_t icm_encrypt(uint32_t length) {
           icm_temp_storage->valid[id] = 1;
           memcpy(&(icm_temp_storage->record[id]), base + offset, 64);
           // also, copy the address of the current contract
-          memcpy(&(icm_temp_storage->record[id].a), call_frame->address, sizeof(address_t));
+          memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
         }
 
         // nothing to be sent out
@@ -821,7 +828,7 @@ uint8_t icm_encrypt(uint32_t length) {
           icm_temp_storage->valid[id] = 1;
           memcpy(&(icm_temp_storage->record[id]), base, 64);
           // also, copy the address of the current contract
-          memcpy(&(icm_temp_storage->record[id].a), call_frame->address, sizeof(address_t));
+          memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
 
           base += 64;
         }
