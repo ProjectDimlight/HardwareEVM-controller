@@ -149,8 +149,8 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->input       = call_frame->code_sign   + sign_length(code_length);
   call_frame->input_sign  = call_frame->input       + page_length(input_length);
   call_frame->stack       = call_frame->input_sign  + sign_length(input_length);
-  call_frame->stack_sign  = call_frame->stack       + 1024;
-  call_frame->memory      = call_frame->stack_sign  + 32;
+  call_frame->stack_sign  = call_frame->stack       + 32 * 1024;
+  call_frame->memory      = call_frame->stack_sign  + 64;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
 
   for (uint32_t i = 0; i < sign_length(code_length); i += 64) {
