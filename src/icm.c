@@ -24,6 +24,7 @@ uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_memory_sign_tmp[64 * PAGE_SIZE];
 uint8_t icm_ram_return_tmp[1024 * PAGE_SIZE];
 uint8_t icm_ram_return_sign_tmp[64 * PAGE_SIZE];
+uint8_t icm_ram_deployed_code[1024 * PAGE_SIZE];
 
 ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFD0000ll;
 ICMConfig      * const icm_config       = (ICMConfig*)0xFFFE0000ll;
@@ -273,6 +274,9 @@ void icm_init() {
 
 void icm_clear_storage() {
   memset(icm_temp_storage->valid, 0, sizeof(icm_temp_storage->valid));
+
+  icm_config->deployed_codes_pointer = icm_config->deployed_codes + 1;
+  icm_config->deployed_codes->top = icm_ram_deployed_code;
 }
 
 // [TODO] this function is used only when using address-separated storage strategy
@@ -298,6 +302,30 @@ void icm_generate_dummy_requests() {
 
 void icm_record_history() {
   
+}
+
+///////////////////////////////////////////////////////////////////
+
+// void *icm_get_address_for_create(void *address);
+
+void *icm_get_address_for_create2(void *sender_address, void *salt) {
+  // first hash the code
+  // The code is the content of the returndata
+  sha3_Init256(&c);
+  for (uint32_t i = 0; i < icm_config->immutable_page_length; i += PAGE_SIZE) {
+    uint32_t len = i + PAGE_SIZE < icm_config->immutable_page_length ? PAGE_SIZE : icm_config->immutable_page_length - i;
+    aes_decrypt(icm_raw_data_base, icm_ram_return_tmp, len);
+    sha3_Update(&c, icm_raw_data_base, len);
+  }
+  void *code_hash = sha3_Finalize(&c);
+
+  sha3_Init256(&c);
+  uint8_t head = 0xff;
+  sha3_Update(&c, &head, 1);
+  sha3_Update(&c, sender_address, sizeof(address_t));
+  sha3_Update(&c, salt, sizeof(uint256_t));
+  sha3_Update(&c, code_hash, sizeof(uint256_t));
+  return sha3_Finalize(&c);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -535,8 +563,13 @@ void icm_call_end_state_machine() {
     icm_debug("deploy", 6);
 #endif
       // The return value is the code to be deployed
-      // [TODO] hash the code to get address
-      // [TODO] then deploy locally
+
+      void *code_address = icm_get_address_for_create2(sender_address, salt);
+      memcpy(icm_config->deployed_codes_pointer->address, code_address, sizeof(address_t));
+      icm_config->deployed_codes_pointer->length    = icm_config->immutable_page_length;
+      icm_config->deployed_codes_pointer->code      = (icm_config->deployed_codes_pointer - 1)->top;
+      icm_config->deployed_codes_pointer->code_sign = icm_config->deployed_codes_pointer->code      + page_length(icm_config->deployed_codes_pointer->length);
+      icm_config->deployed_codes_pointer->top       = icm_config->deployed_codes_pointer->code_sign + sign_length(icm_config->deployed_codes_pointer->length);
     }
 
     if (icm_stack_is_empty()) {

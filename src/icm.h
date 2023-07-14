@@ -3,7 +3,7 @@
 
 #include "evm_controller.h"
 #include "aes.h"
-// #include "sha3.h"
+#include "sha3.h"
 #include "uECC.h"
 // #include "xsecure.h"
 
@@ -55,6 +55,12 @@ typedef struct __OCMStackFrame{
   uint8_t *top;
 } OCMStackFrame;
 
+typedef struct __OCMDeployedCodeFrame{
+  address_t address;
+  uint32_t length;
+  uint8_t *code, *code_sign, *top;
+} OCMDeployedCodeFrame;
+
 typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
@@ -82,12 +88,17 @@ typedef struct {
   uint8_t user_pub[32];
   uint8_t zero[64];
 
+  sha3_context c;
+
   // sha3_context sha_inst;
 
   ////////////////////////////////////////////
 
   OCMStackFrame call_stack[16];
   OCMStackFrame *call_frame_pointer;
+
+  OCMDeployedCodeFrame deployed_codes[16];
+  OCMDeployedCodeFrame *deployed_codes_pointer;
 
   ////////////////////////////////////////////
 
