@@ -642,7 +642,16 @@ void handle_ecp(ECP *in) {
     content_length = 32;
     memcpy_b(icm_raw_data_base, evm_stack_addr, content_length);
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
-    icm_encrypt(sizeof(ECP) + content_length);
+
+    if (icm_encrypt(sizeof(ECP) + content_length)) {
+      // locally deployed code
+      uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
+      volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+      *stackOp = 0;  // pop the address
+      memcpy_b(stackData, icm_raw_data_base, 32);
+      *stackOp = 1;  // push the hash
+      ready = 1; 
+    }
   }
   else if (req->opcode == LOG) {
     // [TODO] send the stack contents to host as log

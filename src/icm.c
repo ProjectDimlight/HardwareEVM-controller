@@ -154,6 +154,15 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->memory      = call_frame->stack_sign  + 64;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
 
+  call_frame->locally_deployed_contract_code = NULL;
+  for (OCMDeployedCodeFrame *p = icm_config->deployed_codes + 1; p <= icm_config->deployed_codes_pointer; p++) {
+    if (memcmp(p->address, icm_config->call_frame_pointer->address, 20) == 0) {
+      // using deployed code
+      call_frame->locally_deployed_contract_code = p;
+      break;      
+    }
+  }
+
   for (uint32_t i = 0; i < sign_length(code_length); i += 64) {
     call_frame->code_sign[i + 63] = 0;
   }
@@ -275,7 +284,7 @@ void icm_init() {
 void icm_clear_storage() {
   memset(icm_temp_storage->valid, 0, sizeof(icm_temp_storage->valid));
 
-  icm_config->deployed_codes_pointer = icm_config->deployed_codes + 1;
+  icm_config->deployed_codes_pointer = icm_config->deployed_codes;
   icm_config->deployed_codes->top = icm_ram_deployed_code;
 }
 
@@ -306,9 +315,9 @@ void icm_record_history() {
 
 ///////////////////////////////////////////////////////////////////
 
-// void *icm_get_address_for_create(void *address);
+// void icm_get_address_for_create(void *address);
 
-void *icm_get_address_for_create2(void *sender_address, void *salt) {
+void icm_get_address_for_create2(void *address_output, void *code_hash_output, void *sender_address, void *salt) {
   // first hash the code
   // The code is the content of the returndata
   sha3_Init256(&c);
@@ -318,14 +327,16 @@ void *icm_get_address_for_create2(void *sender_address, void *salt) {
     sha3_Update(&c, icm_raw_data_base, len);
   }
   void *code_hash = sha3_Finalize(&c);
+  memcpy(code_hash_output, code_hash, 32);
 
   sha3_Init256(&c);
   uint8_t head = 0xff;
   sha3_Update(&c, &head, 1);
   sha3_Update(&c, sender_address, sizeof(address_t));
   sha3_Update(&c, salt, sizeof(uint256_t));
-  sha3_Update(&c, code_hash, sizeof(uint256_t));
-  return sha3_Finalize(&c);
+  sha3_Update(&c, code_hash_output, sizeof(uint256_t));
+  void *address = sha3_Finalize(&c);
+  memcpy(address_output, address + 12, sizeof(address_t));
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -464,7 +475,7 @@ void icm_call_end_state_machine() {
       code_length = icm_config->immutable_page_length;
       input_length = 0;
       offset = *(uint32_t*)(evm_stack + 32);
-      size = *(uint32_t*)(evm_stack + 32);
+      size = *(uint32_t*)(evm_stack + 32 * 2);
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
     }
@@ -563,13 +574,19 @@ void icm_call_end_state_machine() {
     icm_debug("deploy", 6);
 #endif
       // The return value is the code to be deployed
-
-      void *code_address = icm_get_address_for_create2(sender_address, salt);
-      memcpy(icm_config->deployed_codes_pointer->address, code_address, sizeof(address_t));
+      icm_config->deployed_codes_pointer++;
+      void *salt = *(uint32_t*)(call_frame->stack + 32 * 3);
+      void *sender_address = call_frame->address;
+      icm_get_address_for_create2(icm_config->deployed_codes_pointer->address, icm_config->deployed_codes_pointer->code_hash, sender_address, salt);
       icm_config->deployed_codes_pointer->length    = icm_config->immutable_page_length;
       icm_config->deployed_codes_pointer->code      = (icm_config->deployed_codes_pointer - 1)->top;
       icm_config->deployed_codes_pointer->code_sign = icm_config->deployed_codes_pointer->code      + page_length(icm_config->deployed_codes_pointer->length);
       icm_config->deployed_codes_pointer->top       = icm_config->deployed_codes_pointer->code_sign + sign_length(icm_config->deployed_codes_pointer->length);
+    
+      for (uint32_t i = 0, t; (t = i * PAGE_SIZE) < icm_config->deployed_codes_pointer->length; i++) {
+        memcpy(icm_config->deployed_codes_pointer->code + t, icm_ram_return_tmp, PAGE_SIZE);
+        memcpy(icm_config->deployed_codes_pointer->code_sign + i * 64, icm_ram_return_sign_tmp, 64);
+      }
     }
 
     if (icm_stack_is_empty()) {
@@ -625,7 +642,8 @@ void icm_call_end_state_machine() {
     uint32_t new_stack_size = call_frame->stack_size - call_frame->num_of_params + 1;
     *(uint32_t*)icm_raw_data_base = new_stack_size;
     if (call_frame->call_end_func == OP_CREATE || call_frame->call_end_func == OP_CREATE2) {
-      // [TODO] set address
+      memset(icm_raw_data_base + 4 + 20, 0, 12);
+      memcpy(icm_raw_data_base + 4, icm_config->deployed_codes_pointer->address, 20);
     } else {
       // set success
       memset(icm_raw_data_base + 4, 0, 32);
@@ -810,6 +828,14 @@ uint8_t icm_encrypt(uint32_t length) {
     build_outgoing_packet(length);
     return 1;
   } else if (req->opcode == QUERY) {
+    if (req->func == 0x1f) {
+      for (OCMDeployedCodeFrame *p = icm_config->deployed_codes + 1; p <= icm_config->deployed_codes_pointer; p++) {
+        if (memcmp(p->address, icm_raw_data_base, 20) == 0) {
+          memcpy(icm_raw_data_base, p->code_hash, 32);
+          return 1;
+        }
+      }
+    }
     // plaintext params
     memcpy(req->data, icm_raw_data_base, content_length);
     build_outgoing_packet(sizeof(ECP) + content_length);
@@ -979,12 +1005,14 @@ uint8_t icm_encrypt(uint32_t length) {
           if (req->src == CODE || (req->src == CALLDATA && icm_stack_is_root())) {
             if (req->dest_offset >= target_page_length) {
               memset(icm_raw_data_base, 0, PAGE_SIZE);
-            } else if (target_page_sign[sign_offset(req->dest_offset) + 63] == 0) { // not valid
+            } else if (target_page_sign[sign_offset(req->dest_offset) + 63] != 0) { // valid
+              aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+            } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
+              aes_decrypt(icm_raw_data_base, icm_config->call_frame_pointer->locally_deployed_contract_code->code + req->dest_offset, PAGE_SIZE);
+            } else {
               // pass out
               build_outgoing_packet(sizeof(ECP));
               return 0;
-            } else {
-              aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
             }
           } else {
             if (req->dest_offset >= target_page_length) {

@@ -29,6 +29,13 @@ enum CESMStates{
   CESM_WAIT_FOR_MEMORY_COPY
 };
 
+typedef struct __OCMDeployedCodeFrame{
+  address_t address;
+  uint256_t code_hash;
+  uint32_t length;
+  uint8_t *code, *code_sign, *top;
+} OCMDeployedCodeFrame;
+
 /*
 上一层堆栈 ][ CODE | INPUT | STACK               | MEMORY            | RETURN ] [ 下一层
              定长    定长    变长                   变长                变长        此时上层Memory长度不会变化
@@ -48,18 +55,13 @@ typedef struct __OCMStackFrame{
   uint8_t call_end_func, num_of_params;
 
   // RAM pointers
+  OCMDeployedCodeFrame *locally_deployed_contract_code;
   uint8_t *code, *code_sign;
   uint8_t *input, *input_sign;
   uint8_t *stack, *stack_sign;
   uint8_t *memory, *memory_sign;
   uint8_t *top;
 } OCMStackFrame;
-
-typedef struct __OCMDeployedCodeFrame{
-  address_t address;
-  uint32_t length;
-  uint8_t *code, *code_sign, *top;
-} OCMDeployedCodeFrame;
 
 typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
