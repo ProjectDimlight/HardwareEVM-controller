@@ -375,6 +375,7 @@ void evm_memory_copy(ECP *req) {
     }
     
     // copy
+    icm_debug("memcopy", 7);
     memcpy_b(addr_dest, addr_src, step_length);
     *pte_dest |= 0x3;
 

@@ -95,6 +95,14 @@ uint32_t sign_offset(uint32_t length) {
   return length / PAGE_SIZE * 64;
 }
 
+uint32_t page_number(uint32_t length) {
+  if (length == 0) {
+    return 0;
+  } else {
+    return (length - 1) / PAGE_SIZE + 1;
+  }
+}
+
 uint8_t icm_stack_is_empty() {
   return call_frame == icm_config->call_stack;
 }
@@ -252,15 +260,15 @@ uint8_t *ecdsa_hash(uint8_t *data, uint32_t size) {
   return NULL;
 }
 
-void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size) {
-  uint8_t *hash = ecdsa_hash(data, size);
-  uECC_sign(icm_config->hevm_priv, hash, 32, out, icm_config->curve);
-}
+// void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size) {
+//   uint8_t *hash = ecdsa_hash(data, size);
+//   uECC_sign(icm_config->hevm_priv, hash, 32, out, icm_config->curve);
+// }
 
-int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, int is_user_key) {
-  uint8_t *hash = ecdsa_hash(data, size);
-  return uECC_verify(is_user_key ? icm_config->user_pub : icm_config->hevm_pub, hash, 32, in, icm_config->curve);
-}
+// int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, int is_user_key) {
+//   uint8_t *hash = ecdsa_hash(data, size);
+//   return uECC_verify(is_user_key ? icm_config->user_pub : icm_config->hevm_pub, hash, 32, in, icm_config->curve);
+// }
 
 ///////////////////////////////////////////////////////////////////
 
@@ -320,6 +328,7 @@ void icm_record_history() {
 void icm_get_address_for_create2(void *address_output, void *code_hash_output, void *sender_address, void *salt) {
   // first hash the code
   // The code is the content of the returndata
+  sha3_context* c = &(icm_config->c);
   sha3_Init256(&c);
   for (uint32_t i = 0; i < icm_config->immutable_page_length; i += PAGE_SIZE) {
     uint32_t len = i + PAGE_SIZE < icm_config->immutable_page_length ? PAGE_SIZE : icm_config->immutable_page_length - i;
@@ -336,6 +345,10 @@ void icm_get_address_for_create2(void *address_output, void *code_hash_output, v
   sha3_Update(&c, salt, sizeof(uint256_t));
   sha3_Update(&c, code_hash_output, sizeof(uint256_t));
   void *address = sha3_Finalize(&c);
+#ifdef ICM_DEBUG
+  icm_debug("deployaddr", 10);
+  icm_debug(address, sizeof(address_t));
+#endif
   memcpy(address_output, address + 12, sizeof(address_t));
 }
 
@@ -352,6 +365,10 @@ void icm_call(uint8_t func) {
     // CREATE: code is local, calldata is none
     icm_config->cesm_ready = 1;
     icm_config->immutable_page_length = *(uint32_t*)(evm_stack + 64);  // size
+#ifdef ICM_DEBUG
+    icm_debug("page_length", 11);
+    icm_debug(&(icm_config->immutable_page_length), sizeof(uint32_t));
+#endif
   } else {
     // call target address, query from host
     // send ICM_SET_CONTRACT
@@ -401,7 +418,10 @@ void icm_end(uint8_t func) {
     icm_config->immutable_page_length = (call_frame - 1)->return_length = ecp.length;
 
 #ifdef ICM_DEBUG
+    icm_debug("return", 6);
+    icm_debug("src", 3);
     icm_debug(&(ecp.src_offset), 4);
+    icm_debug("length", 6);
     icm_debug(&(ecp.length), 4);
 #endif
 
@@ -498,6 +518,8 @@ void icm_call_end_state_machine() {
       icm_config->immutable_page = call_frame->code;
       icm_config->immutable_page_sign = call_frame->code_sign;
       icm_config->immutable_page_length = call_frame->code_length;
+      for (uint32_t i = 0; i < page_number(call_frame->code_length); i++)
+        call_frame->code_sign[i * 64 + 63] = 1;
     } else {
       icm_config->immutable_page = call_frame->input;
       icm_config->immutable_page_sign = call_frame->input_sign;  
@@ -559,6 +581,8 @@ void icm_call_end_state_machine() {
       uint32_t debug_length = PAGE_SIZE;
       if (icm_config->immutable_page_length < debug_length)
         debug_length = icm_config->immutable_page_length;
+      icm_debug("length", 6);
+      icm_debug(&debug_length, 4);
       
       uint8_t display_page[1024];
       aes_decrypt(display_page, icm_config->immutable_page, debug_length);
@@ -1003,6 +1027,7 @@ uint8_t icm_encrypt(uint32_t length) {
         // copy back to HEVM
         if (req->opcode == SWAP) {
           if (req->src == CODE || (req->src == CALLDATA && icm_stack_is_root())) {
+            // potential buffer overflow attack ?
             if (req->dest_offset >= target_page_length) {
               memset(icm_raw_data_base, 0, PAGE_SIZE);
             } else if (target_page_sign[sign_offset(req->dest_offset) + 63] != 0) { // valid

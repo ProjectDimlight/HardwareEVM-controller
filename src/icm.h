@@ -4,7 +4,7 @@
 #include "evm_controller.h"
 #include "aes.h"
 #include "sha3.h"
-#include "uECC.h"
+// #include "uECC.h"
 // #include "xsecure.h"
 
 #define ICM_DEBUG
@@ -85,7 +85,7 @@ typedef struct {
 
   struct AES_ctx aes_inst;
   
-  uECC_Curve curve;
+  // uECC_Curve curve;
   uint8_t hevm_pub[32], hevm_priv[32]; 
   uint8_t user_pub[32];
   uint8_t zero[64];
