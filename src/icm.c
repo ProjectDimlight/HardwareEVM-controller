@@ -221,6 +221,7 @@ void icm_stack_pop() {
 ///////////////////////////////////////////////////////////////////
 
 uint32_t padded_size(uint32_t size, uint32_t block_size) {
+  if (size == 0) return 0;
   uint32_t number_of_blocks = ((size - 1) / block_size + 1);
   return number_of_blocks * block_size;
 }
@@ -254,6 +255,7 @@ uint8_t *ecdsa_hash(uint8_t *data, uint32_t size) {
   /*
   sha3_context *c = &sha_inst;
   sha3_Init256(c);
+  sha3_SetFlags(&c, SHA3_FLAGS_KECCAK);
   sha3_Update(c, data, size);
   return sha3_Finalize(c);
   */
@@ -325,31 +327,42 @@ void icm_record_history() {
 
 // void icm_get_address_for_create(void *address);
 
-void icm_get_address_for_create2(void *address_output, void *code_hash_output, void *sender_address, void *salt) {
+void icm_get_address_for_create2(uint8_t *address_output, uint8_t *code_hash_output, uint8_t *sender_address, uint8_t *salt) {
   // first hash the code
   // The code is the content of the returndata
-  sha3_context* c = &(icm_config->c);
-  sha3_Init256(&c);
-  for (uint32_t i = 0; i < icm_config->immutable_page_length; i += PAGE_SIZE) {
-    uint32_t len = i + PAGE_SIZE < icm_config->immutable_page_length ? PAGE_SIZE : icm_config->immutable_page_length - i;
-    aes_decrypt(icm_raw_data_base, icm_ram_return_tmp, len);
-    sha3_Update(&c, icm_raw_data_base, len);
+  keccak_256_init();
+  // here just test for keccak256 lib, only 1 page code
+  for (uint32_t i = 0; i < call_frame->code_length; i += PAGE_SIZE) {
+    uint32_t len = i + PAGE_SIZE < call_frame->code_length ? PAGE_SIZE : call_frame->code_length - i;
+    aes_decrypt(icm_raw_data_base, call_frame->code, len);
+    keccak_256_update(icm_raw_data_base, len);
   }
-  void *code_hash = sha3_Finalize(&c);
-  memcpy(code_hash_output, code_hash, 32);
+  keccak_256_finalize(code_hash_output);
+#ifdef ICM_DEBUG
+  icm_debug("codehash", 8);
+  icm_debug(code_hash_output, 32);
+#endif
 
-  sha3_Init256(&c);
+  keccak_256_init();
   uint8_t head = 0xff;
-  sha3_Update(&c, &head, 1);
-  sha3_Update(&c, sender_address, sizeof(address_t));
-  sha3_Update(&c, salt, sizeof(uint256_t));
-  sha3_Update(&c, code_hash_output, sizeof(uint256_t));
-  void *address = sha3_Finalize(&c);
+  keccak_256_update(&head, 1);
+  uint8_t reverseAddress[20], *senderAddress = (uint8_t*)sender_address;
+  for (int i = 0; i < sizeof(address_t); i++)
+    reverseAddress[i] = senderAddress[19 - i];
+  keccak_256_update(reverseAddress, sizeof(address_t));
+  uint8_t reverseSalt[32];
+  for (int i = 0; i < 32; i++)
+    reverseSalt[i] = salt[31 - i];
+  keccak_256_update(reverseSalt, sizeof(uint256_t));
+  keccak_256_update(code_hash_output, sizeof(uint256_t));
+  uint8_t address[32];
+  keccak_256_finalize(address);
+  for (int i = 0; i < 20; i++)
+    address_output[i] = address[31 - i];
 #ifdef ICM_DEBUG
   icm_debug("deployaddr", 10);
-  icm_debug(address, sizeof(address_t));
+  icm_debug(address_output, 20);
 #endif
-  memcpy(address_output, address + 12, sizeof(address_t));
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -418,11 +431,15 @@ void icm_end(uint8_t func) {
     icm_config->immutable_page_length = (call_frame - 1)->return_length = ecp.length;
 
 #ifdef ICM_DEBUG
-    icm_debug("return", 6);
-    icm_debug("src", 3);
-    icm_debug(&(ecp.src_offset), 4);
-    icm_debug("length", 6);
-    icm_debug(&(ecp.length), 4);
+    // icm_debug("return", 6);
+    // icm_debug("src", 3);
+    // icm_debug(&(ecp.src_offset), 4);
+    // icm_debug("length", 6);
+    // icm_debug(&(ecp.length), 4);
+
+    icm_debug("returnMEM", 9);
+    aes_decrypt(icm_raw_data_base, call_frame->memory, ecp.length);
+    icm_debug(icm_raw_data_base, ecp.length);
 #endif
 
     evm_memory_copy(&ecp);
@@ -499,6 +516,10 @@ void icm_call_end_state_machine() {
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
     }
+    icm_debug("callOff", 7);
+    icm_debug(&offset, 4);
+    icm_debug("callSize", 8);
+    icm_debug(&size, 4);
 
     // stack push
     icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value);
@@ -534,6 +555,9 @@ void icm_call_end_state_machine() {
     ecp.dest_offset = 0;
     ecp.length = size;
     cesm_state = CESM_WAIT_FOR_INPUT_COPY;
+    icm_debug("memshow", 7);
+    aes_decrypt(icm_raw_data_base, (call_frame - 1)->memory, 0x1e);
+    icm_debug(icm_raw_data_base, 0x1e);
     evm_memory_copy(&ecp);
   } else if (cesm_state == CESM_WAIT_FOR_INPUT_COPY) {
     // CALL
@@ -590,29 +614,30 @@ void icm_call_end_state_machine() {
     }
 #endif
 
+    OCMStackFrame* deployFrame = call_frame - 1;
     uint8_t end_func = call_frame->call_end_func;
-    icm_stack_pop();
 
-    if (call_frame->call_end_func == OP_CREATE || call_frame->call_end_func == OP_CREATE2) {
+    if (deployFrame->call_end_func == OP_CREATE || deployFrame->call_end_func == OP_CREATE2) {
 #ifdef ICM_DEBUG
     icm_debug("deploy", 6);
 #endif
       // The return value is the code to be deployed
       icm_config->deployed_codes_pointer++;
-      void *salt = *(uint32_t*)(call_frame->stack + 32 * 3);
-      void *sender_address = call_frame->address;
+      uint8_t *salt = (deployFrame->stack + 32 * 3);
+      uint8_t *sender_address = deployFrame->address;
       icm_get_address_for_create2(icm_config->deployed_codes_pointer->address, icm_config->deployed_codes_pointer->code_hash, sender_address, salt);
       icm_config->deployed_codes_pointer->length    = icm_config->immutable_page_length;
       icm_config->deployed_codes_pointer->code      = (icm_config->deployed_codes_pointer - 1)->top;
       icm_config->deployed_codes_pointer->code_sign = icm_config->deployed_codes_pointer->code      + page_length(icm_config->deployed_codes_pointer->length);
       icm_config->deployed_codes_pointer->top       = icm_config->deployed_codes_pointer->code_sign + sign_length(icm_config->deployed_codes_pointer->length);
-    
+
       for (uint32_t i = 0, t; (t = i * PAGE_SIZE) < icm_config->deployed_codes_pointer->length; i++) {
         memcpy(icm_config->deployed_codes_pointer->code + t, icm_ram_return_tmp, PAGE_SIZE);
         memcpy(icm_config->deployed_codes_pointer->code_sign + i * 64, icm_ram_return_sign_tmp, 64);
       }
+      icm_debug("deployFin", 9);
     }
-
+    icm_stack_pop();
     if (icm_stack_is_empty()) {
       // Finish
       ECP *ecp = get_output_buffer();
@@ -826,6 +851,11 @@ uint8_t icm_decrypt() {
 #endif
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
+
+        uint8_t tmpBuffer[100];
+        memcpy(tmpBuffer, icm_raw_data_base, 0x30);
+        icm_debug(tmpBuffer, 0x30);
+
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 16));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid

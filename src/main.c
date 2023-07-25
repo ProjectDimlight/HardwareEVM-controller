@@ -3,6 +3,8 @@
 #include "sim_ram.h"
 #include "icm.h"
 
+extern ICMConfig* const icm_config;
+
 extern uint32_t input_size;
 
 /*
