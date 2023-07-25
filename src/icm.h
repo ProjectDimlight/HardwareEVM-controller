@@ -3,7 +3,7 @@
 
 #include "evm_controller.h"
 #include "aes.h"
-#include "sha3.h"
+#include "keccak.h"
 // #include "uECC.h"
 // #include "xsecure.h"
 
@@ -90,9 +90,10 @@ typedef struct {
   uint8_t user_pub[32];
   uint8_t zero[64];
 
-  sha3_context c;
-
-  // sha3_context sha_inst;
+  // keccak space
+  uint64_t keccak_A[25];
+  uint32_t keccak_len;
+  uint8_t keccak_buf[1088 / 8];
 
   ////////////////////////////////////////////
 
