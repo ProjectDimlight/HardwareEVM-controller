@@ -221,6 +221,7 @@ void icm_stack_pop() {
 ///////////////////////////////////////////////////////////////////
 
 uint32_t padded_size(uint32_t size, uint32_t block_size) {
+  if (size == 0) return 0;
   uint32_t number_of_blocks = ((size - 1) / block_size + 1);
   return number_of_blocks * block_size;
 }
