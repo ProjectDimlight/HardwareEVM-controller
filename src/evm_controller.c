@@ -436,8 +436,9 @@ void handle_ecp(ECP *in) {
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
-      icm_debug("clear FPGA", 10);
-
+#ifdef ICM_DEBUG
+    icm_debug("clear buffer", 12);
+#endif
       // clear memory valid tag
       // code: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
@@ -457,9 +458,10 @@ void handle_ecp(ECP *in) {
       evm_active = 1;
       // host tell evm to start
       *(uint8_t*)evm_cin_addr = 1;
-      
-      icm_debug("start exec", 10);
 
+#ifdef ICM_DEBUG
+    icm_debug("start exec", 10);
+#endif
       return;
     }
     else if (req->opcode == DEBUG) {
@@ -539,7 +541,6 @@ void handle_ecp(ECP *in) {
 #endif
   }
   else if (req->opcode == END) {
-    icm_debug("end exec", 8);
 
     // before actually ending the run
     // print all traces
@@ -547,7 +548,7 @@ void handle_ecp(ECP *in) {
     evm_active = 0;
 
 #ifdef ICM_DEBUG
-  icm_debug("dump debug", 10);
+    icm_debug("dump debug", 10);
 #endif
 
     // Send a COPY before sending END
@@ -563,14 +564,14 @@ void handle_ecp(ECP *in) {
     icm_encrypt(sizeof(ECP) + buf->length);
 
 #ifdef ICM_DEBUG
-  icm_debug("dump storage", 12);
+    icm_debug("dump storage", 12);
 #endif
 
     // COPY memory
     evm_dump_memory();
     
 #ifdef ICM_DEBUG
-  icm_debug("dump memory", 11);
+    icm_debug("dump memory", 11);
 #endif
 
     // COPY stack
@@ -588,10 +589,8 @@ void handle_ecp(ECP *in) {
     evm_clear_stack();
     
 #ifdef ICM_DEBUG
-  icm_debug("dump stack", 10);
+    icm_debug("dump stack", 10);
 #endif
-
-    icm_debug("end", 3);
 
     // end
     content_length = 0;
@@ -599,12 +598,14 @@ void handle_ecp(ECP *in) {
     icm_encrypt(sizeof(ECP));
   }
   else if (req->opcode == CALL) {
-    icm_debug("end exec", 8);
-
     // before actually ending the run
     // print all traces
     check_debug_buffer();
     evm_active = 0;
+
+#ifdef ICM_DEBUG
+    icm_debug("dump debug", 10);
+#endif
 
     // evm call to host
     // First send current environment to host
@@ -619,8 +620,15 @@ void handle_ecp(ECP *in) {
     buf->length = evm_store_storage();
     icm_encrypt(sizeof(ECP) + buf->length);
 
+#ifdef ICM_DEBUG
+    icm_debug("dump storage", 12);
+#endif
+
     // COPY memory
     evm_dump_memory();
+#ifdef ICM_DEBUG
+    icm_debug("dump memory", 11);
+#endif
 
     // COPY stack
     // the call params should remain as plaintext
@@ -643,7 +651,9 @@ void handle_ecp(ECP *in) {
     buf->length = evm_store_stack(-1);
     icm_encrypt(sizeof(ECP) + buf->length);
 
-    icm_debug("call", 4);
+#ifdef ICM_DEBUG
+    icm_debug("dump stack", 10);
+#endif
 
     // call
     content_length = 0;

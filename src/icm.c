@@ -5,7 +5,10 @@
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 #define SIGNATURE_LENGTH 56
-#define PAGES(x) ((x - 1) / PAGE_SIZE + 1)
+#define SIGNATURE_SIZE 64
+#define PAGE_ADDR_W 10
+#define PAGE_SIGN_W 6
+#define PAGES(x) (x ? (((x - 1) >> PAGE_ADDR_W) + 1) : 0)
 #define SELF_ADDRESS ((call_frame + 1)->address)
 
 #define call_frame (icm_config->call_frame_pointer)
@@ -80,27 +83,19 @@ uint32_t icm_find(uint256_t key) {
 ///////////////////////////////////////////////////////////////////
 
 uint32_t page_length(uint32_t length) {
-  return PAGES(length) * PAGE_SIZE;
+  return PAGES(length) << PAGE_ADDR_W;
 }
 
 uint32_t sign_length(uint32_t length) {
-  return PAGES(length) * 64;
+  return PAGES(length) << PAGE_SIGN_W;
 }
 
 uint32_t page_offset(uint32_t length) {
-  return length / PAGE_SIZE * PAGE_SIZE;
+  return length & (~0x3ff);
 }
 
 uint32_t sign_offset(uint32_t length) {
-  return length / PAGE_SIZE * 64;
-}
-
-uint32_t page_number(uint32_t length) {
-  if (length == 0) {
-    return 0;
-  } else {
-    return (length - 1) / PAGE_SIZE + 1;
-  }
+  return (length >> PAGE_ADDR_W) << PAGE_SIGN_W;
 }
 
 uint8_t icm_stack_is_empty() {
@@ -122,6 +117,10 @@ OCMDeployedCodeFrame *icm_find_locally_deployed_contract_code(address_p addr) {
 }
 
 void icm_stack_push(address_t callee_address, address_p callee_storage_address, address_p callee_caller_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
+#ifdef ICM_DEBUG
+    icm_debug("call stack push", 15);
+#endif
+
   uint8_t init = 0;
   if (icm_stack_is_empty()) {
     // the 0-th element in the stack is dummy header
@@ -146,6 +145,10 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     memcpy(call_frame->memory_sign, icm_ram_memory_sign_tmp, sign_length(call_frame->memory_length));
     call_frame->top = call_frame->memory_sign + sign_length(call_frame->memory_length);
   }
+
+#ifdef ICM_DEBUG
+  icm_debug("pc msize gas load", 17);
+#endif
   
   // create a new frame
   void *base = call_frame->top;
@@ -163,6 +166,10 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->gas = gas;
   memcpy(call_frame->value, value, sizeof(uint256_t));
 
+#ifdef ICM_DEBUG
+  icm_debug("call frame set meta", 19);
+#endif
+
   call_frame->code        = base;
   call_frame->code_sign   = call_frame->code        + page_length(code_length);
   call_frame->input       = call_frame->code_sign   + sign_length(code_length);
@@ -172,14 +179,22 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->memory      = call_frame->stack_sign  + 64;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
 
+#ifdef ICM_DEBUG
+  icm_debug("call frame set offset", 21);
+#endif
+
   call_frame->locally_deployed_contract_code = icm_config->found_deployed_code;
 
-  for (uint32_t i = 0; i < sign_length(code_length); i += 64) {
+  for (uint32_t i = 0, N = sign_length(code_length); i < N; i += 64) {
     call_frame->code_sign[i + 63] = 0;
   }
-  for (uint32_t i = 0; i < sign_length(input_length); i += 64) {
+  for (uint32_t i = 0, N = sign_length(input_length); i < N; i += 64) {
     call_frame->input_sign[i + 63] = 0;
   }
+
+#ifdef ICM_DEBUG
+  icm_debug("call frame set sign", 19);
+#endif
 
   if (!init) {
     // Set ENV
@@ -193,10 +208,18 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     
     memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
     memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
+
+#ifdef ICM_DEBUG
+    icm_debug("set env regs", 12);
+#endif
   }
 }
 
 void icm_stack_pop() {
+#ifdef ICM_DEBUG
+  icm_debug("call stack pop", 14);
+#endif
+
   call_frame--;
 
   if (!icm_stack_is_empty()) {
@@ -216,6 +239,10 @@ void icm_stack_pop() {
     memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
     memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
   }
+
+#ifdef ICM_DEBUG
+  icm_debug("recover env regs", 16);
+#endif
 }
 
 // CALL: stack_push, memcpy (last.mem -> this.input), run
@@ -223,19 +250,23 @@ void icm_stack_pop() {
 
 ///////////////////////////////////////////////////////////////////
 
-uint32_t padded_size(uint32_t size, uint32_t block_size) {
+uint32_t padded_size(uint32_t size, uint32_t block_width) {
   if (size == 0) return 0;
-  uint32_t number_of_blocks = ((size - 1) / block_size + 1);
-  return number_of_blocks * block_size;
+  uint32_t number_of_blocks = (((size - 1) >> block_width) + 1);
+  return number_of_blocks << block_width;
 }
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-  // icm_debug("decrypt", 7);
+#ifdef ICM_DEBUG
+  icm_debug("decrypt", 7);
+#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  size = padded_size(size, 16);
+  size = padded_size(size, 4);
   memcpy(out, in, size);
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
-  // icm_debug("dec fin", 7);
+#ifdef ICM_DEBUG
+  icm_debug("decrypt finish", 14);
+#endif
 }
 
 void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
@@ -247,12 +278,16 @@ void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
 }
 
 uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-  // icm_debug("encrypt", 7);
+#ifdef ICM_DEBUG
+  icm_debug("encrypt", 7);
+#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  size = padded_size(size, 16);
+  size = padded_size(size, 4);
   AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
   memcpy(out, in, size);
-  // icm_debug("enc fin", 7);
+#ifdef ICM_DEBUG
+  icm_debug("encrypt finish", 14);
+#endif
   return size;
 }
 
@@ -560,7 +595,7 @@ void icm_call_end_state_machine() {
       icm_config->immutable_page = call_frame->code;
       icm_config->immutable_page_sign = call_frame->code_sign;
       icm_config->immutable_page_length = call_frame->code_length;
-      for (uint32_t i = 0; i < page_number(call_frame->code_length); i++)
+      for (uint32_t i = 0, N = page_length(call_frame->code_length); i < N; i++)
         call_frame->code_sign[i * 64 + 63] = 1;
     } else {
       icm_config->immutable_page = call_frame->input;
@@ -881,7 +916,7 @@ uint8_t icm_decrypt() {
     icm_debug("recv env", 8);
 #endif
       } else if (req->dest == CODE) { // After internalize, this will be code only
-        memcpy(call_frame->code + req->dest_offset, req->data, padded_size(req->length, 16));
+        memcpy(call_frame->code + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->code_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 #ifdef ICM_DEBUG
     icm_debug("recv code", 9);
@@ -894,7 +929,7 @@ uint8_t icm_decrypt() {
         icm_debug(tmpBuffer, 0x30);
 
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
-        memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 16));
+        memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
