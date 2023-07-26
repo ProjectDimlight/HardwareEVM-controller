@@ -315,6 +315,7 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
 
 void evm_memory_copy(ECP *req) {
   if (req) {
+    // icm_debug("memcopy", 7);
     pending_evm_memory_copy_request.ecp = *req;
     if (req->src == RETURNDATA) {
       pending_evm_memory_copy_request.ecp.src = OCM_IMMUTABLE_MEM;
@@ -375,7 +376,9 @@ void evm_memory_copy(ECP *req) {
     }
     
     // copy
+#ifdef ICM_DEBUG
     icm_debug("memcopy", 7);
+#endif
     memcpy_b(addr_dest, addr_src, step_length);
     *pte_dest |= 0x3;
 
@@ -393,6 +396,7 @@ void evm_memory_copy(ECP *req) {
   }
 
   // finalize
+  // icm_debug("memcopy fin", 11);
   if (req->dest == OCM_MEM || req->dest == OCM_IMMUTABLE_MEM) {
     pte_dest = data_source_to_pte(req->dest, 0);
     sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
@@ -432,6 +436,8 @@ void handle_ecp(ECP *in) {
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
+      icm_debug("clear FPGA", 10);
+
       // clear memory valid tag
       // code: clear all
       for (int i = 0; i < NUMBER_OF_PAGES; i++)
@@ -451,6 +457,9 @@ void handle_ecp(ECP *in) {
       evm_active = 1;
       // host tell evm to start
       *(uint8_t*)evm_cin_addr = 1;
+      
+      icm_debug("start exec", 10);
+
       return;
     }
     else if (req->opcode == DEBUG) {
@@ -530,6 +539,8 @@ void handle_ecp(ECP *in) {
 #endif
   }
   else if (req->opcode == END) {
+    icm_debug("end exec", 8);
+
     // before actually ending the run
     // print all traces
     check_debug_buffer();
@@ -580,12 +591,16 @@ void handle_ecp(ECP *in) {
   icm_debug("dump stack", 10);
 #endif
 
+    icm_debug("end", 3);
+
     // end
     content_length = 0;
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
     icm_encrypt(sizeof(ECP));
   }
   else if (req->opcode == CALL) {
+    icm_debug("end exec", 8);
+
     // before actually ending the run
     // print all traces
     check_debug_buffer();
@@ -627,6 +642,8 @@ void handle_ecp(ECP *in) {
     buf->dest_offset = 0;
     buf->length = evm_store_stack(-1);
     icm_encrypt(sizeof(ECP) + buf->length);
+
+    icm_debug("call", 4);
 
     // call
     content_length = 0;

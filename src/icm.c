@@ -111,6 +111,16 @@ uint8_t icm_stack_is_root() {
   return call_frame == icm_config->call_stack + 1;
 }
 
+OCMDeployedCodeFrame *icm_find_locally_deployed_contract_code(address_p addr) {
+  for (OCMDeployedCodeFrame *p = icm_config->deployed_codes + 1; p <= icm_config->deployed_codes_pointer; p++) {
+    if (memcmp(p->address, addr, 20) == 0) {
+      // found
+      return p; 
+    }
+  }
+  return NULL;
+}
+
 void icm_stack_push(address_t callee_address, address_p callee_storage_address, address_p callee_caller_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
   uint8_t init = 0;
   if (icm_stack_is_empty()) {
@@ -162,14 +172,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->memory      = call_frame->stack_sign  + 64;
   call_frame->memory_sign = icm_ram_memory_sign_tmp;
 
-  call_frame->locally_deployed_contract_code = NULL;
-  for (OCMDeployedCodeFrame *p = icm_config->deployed_codes + 1; p <= icm_config->deployed_codes_pointer; p++) {
-    if (memcmp(p->address, icm_config->call_frame_pointer->address, 20) == 0) {
-      // using deployed code
-      call_frame->locally_deployed_contract_code = p;
-      break;      
-    }
-  }
+  call_frame->locally_deployed_contract_code = icm_config->found_deployed_code;
 
   for (uint32_t i = 0; i < sign_length(code_length); i += 64) {
     call_frame->code_sign[i + 63] = 0;
@@ -227,10 +230,12 @@ uint32_t padded_size(uint32_t size, uint32_t block_size) {
 }
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  // icm_debug("decrypt", 7);
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 16);
   memcpy(out, in, size);
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
+  // icm_debug("dec fin", 7);
 }
 
 void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
@@ -242,10 +247,12 @@ void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
 }
 
 uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  // icm_debug("encrypt", 7);
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 16);
   AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
   memcpy(out, in, size);
+  // icm_debug("enc fin", 7);
   return size;
 }
 
@@ -383,6 +390,18 @@ void icm_call(uint8_t func) {
     icm_debug(&(icm_config->immutable_page_length), sizeof(uint32_t));
 #endif
   } else {
+    address_p address = evm_stack + 32;
+
+    if (icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address)) {
+      // found in local
+      icm_config->ext_code_size = icm_config->found_deployed_code->length;
+      icm_config->cesm_ready = 1;
+      icm_config->contract_address_waiting_for_size = NULL;
+    } else {
+      icm_config->cesm_ready = 0;
+      icm_config->contract_address_waiting_for_size = address;
+    }
+
     // call target address, query from host
     // send ICM_SET_CONTRACT
     ECP *ecp = get_output_buffer();
@@ -393,16 +412,14 @@ void icm_call(uint8_t func) {
     ecp->src_offset = 0;
     ecp->dest_offset = 0;
     ecp->length = sizeof(address_t) * 2;
-    memcpy(ecp->data, evm_stack + 32, sizeof(address_t));
+    memcpy(ecp->data, address, sizeof(address_t));
     if (func == OP_CALLCODE || func == OP_DELEGATECALL) {
       // delegatecall use caller's storage
       memcpy(ecp->data + sizeof(address_t), call_frame->address, sizeof(address_t));
     } else {
-      memcpy(ecp->data + sizeof(address_t), evm_stack + 32, sizeof(address_t));
+      memcpy(ecp->data + sizeof(address_t), address, sizeof(address_t));
     }
     build_outgoing_packet(sizeof(ECP) + ecp->length);
-
-    icm_config->cesm_ready = 0;
   }
 }
 
@@ -463,8 +480,9 @@ void icm_call_end_state_machine() {
     // wait until code size is received
     if (icm_config->cesm_ready == 0) {
       if (call_frame->call_end_func == OP_CREATE ||
-          call_frame->call_end_func == OP_CREATE2)
-      evm_memory_copy(NULL);
+          call_frame->call_end_func == OP_CREATE2) {
+        evm_memory_copy(NULL);
+      }
       return;
     }
     // the code length is set
@@ -516,10 +534,13 @@ void icm_call_end_state_machine() {
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
     }
+
+#ifdef ICM_DEBUG
     icm_debug("callOff", 7);
     icm_debug(&offset, 4);
     icm_debug("callSize", 8);
     icm_debug(&size, 4);
+#endif
 
     // stack push
     icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value);
@@ -555,9 +576,13 @@ void icm_call_end_state_machine() {
     ecp.dest_offset = 0;
     ecp.length = size;
     cesm_state = CESM_WAIT_FOR_INPUT_COPY;
+
+#ifdef ICM_DEBUG
     icm_debug("memshow", 7);
     aes_decrypt(icm_raw_data_base, (call_frame - 1)->memory, 0x1e);
     icm_debug(icm_raw_data_base, 0x1e);
+#endif
+
     evm_memory_copy(&ecp);
   } else if (cesm_state == CESM_WAIT_FOR_INPUT_COPY) {
     // CALL
@@ -635,7 +660,9 @@ void icm_call_end_state_machine() {
         memcpy(icm_config->deployed_codes_pointer->code + t, icm_ram_return_tmp, PAGE_SIZE);
         memcpy(icm_config->deployed_codes_pointer->code_sign + i * 64, icm_ram_return_sign_tmp, 64);
       }
-      icm_debug("deployFin", 9);
+#ifdef ICM_DEBUG
+      icm_debug("deploy finish", 13);
+#endif
     }
     icm_stack_pop();
     if (icm_stack_is_empty()) {
@@ -738,8 +765,12 @@ uint8_t icm_decrypt() {
     } else if (req->func == ICM_SET_USER_PUB) {
       // uECC_decompress(req->data, icm_config->user_pub, uECC_secp224r1());
     } else if (req->func == ICM_SET_CONTRACT) {
-      icm_config->ext_code_size = req->length;
-      icm_step();
+      if (icm_config->contract_address_waiting_for_size &&
+        memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
+        icm_config->contract_address_waiting_for_size = NULL;
+        icm_config->ext_code_size = req->length;
+        icm_step();
+      }
     }
     return 0;
   } else if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
@@ -773,8 +804,14 @@ uint8_t icm_decrypt() {
     uint32_t code_length, input_length;
     uint64_t gas;
     uint256_t value;
+
     memcpy_b(address, evm_env_address, sizeof(address_t));
-    memcpy_b(&code_length, evm_env_code_size, 4);
+    icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address);
+    if (icm_config->found_deployed_code) {
+      code_length = icm_config->found_deployed_code->length;
+    } else {
+      memcpy_b(&code_length, evm_env_code_size, 4);
+    }
     memcpy_b(&input_length, evm_env_calldata_size, 4);
     memcpy_b(&gas, evm_env_code_size, 8);
     memcpy_b(value, evm_env_code_size, sizeof(uint256_t));

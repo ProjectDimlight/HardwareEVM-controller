@@ -7,7 +7,7 @@
 // #include "uECC.h"
 // #include "xsecure.h"
 
-#define ICM_DEBUG
+// #define ICM_DEBUG
 
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
@@ -101,7 +101,9 @@ typedef struct {
   OCMStackFrame *call_frame_pointer;
 
   OCMDeployedCodeFrame deployed_codes[16];
-  OCMDeployedCodeFrame *deployed_codes_pointer;
+  OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
+
+  address_p contract_address_waiting_for_size;
 
   ////////////////////////////////////////////
 
