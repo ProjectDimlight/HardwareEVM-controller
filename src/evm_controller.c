@@ -160,7 +160,7 @@ uint32_t evm_store_storage() {
   uint32_t* slot = (uint32_t*)evm_storage_addr;
   for (uint32_t index = 0; index < 64; index++, slot += 16)
     // copy out if valid and dirty
-    if ((slot[0] & 0x3) == 0x3) {
+    if ((slot[0] & 0x1) == 0x1) {
       data[offset] = (slot[0] & 0xffffffc0) + index;
       for (int i = 1; i < 16; i++)
         data[offset + i] = slot[i];
@@ -187,12 +187,12 @@ void evm_load_storage() {
 
 uint32_t evm_swap_storage(uint32_t *slot) {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
-  uint32_t slot_id = ((void*)slot - evm_storage_addr) >> 6;
+  uint32_t slot_id = (((void*)slot) - evm_storage_addr) >> 6;
 
   // commit dirty item
   uint32_t offset = 1;
   // copy out if valid & dirty
-  if ((slot[0] & 0x3) == 0x3) {
+  if ((slot[0] & 0x1) == 0x1) {
     data[0] = 1;
     // copy out to OCM if valid for better performance
     // regardless of whether it is dirty
@@ -488,6 +488,7 @@ void handle_ecp(ECP *in) {
   if (req->opcode == COPY) {
     if (req->dest == STORAGE) {
       evm_load_storage();
+      icm_debug("sload success", 13);
     }
     else if (req->dest == STACK) {
       evm_load_stack(req->func);

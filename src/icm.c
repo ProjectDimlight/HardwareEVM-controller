@@ -417,6 +417,10 @@ void icm_call(uint8_t func) {
   cesm_state = CESM_WAIT_FOR_CODE_SIZE;
 
   if (func == OP_CREATE || func == OP_CREATE2) {
+    if (func == OP_CREATE) {
+      icm_debug("create not supported", 20);
+    }
+
     // CREATE: code is local, calldata is none
     icm_config->cesm_ready = 1;
     icm_config->immutable_page_length = *(uint32_t*)(evm_stack + 64);  // size
@@ -896,6 +900,7 @@ uint8_t icm_decrypt() {
       
       // responses of dummy requests should be discarded
       if (memcmp(req->data + 4, icm_config->sload_real_key, sizeof(uint256_t))) {
+        icm_debug("dummy sload", 11);
         return 0;
       }
 
@@ -903,6 +908,7 @@ uint8_t icm_decrypt() {
 
       // plaintext need not decrypt
       memcpy(icm_raw_data_base, req->data, req->length);
+      icm_debug(icm_raw_data_base, req->length);
       return 1;
     } else {  // memory like
       // the size of memory pages are always multiples of 16
@@ -924,15 +930,20 @@ uint8_t icm_decrypt() {
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
 
+#ifdef ICM_DEBUG
         uint8_t tmpBuffer[100];
         memcpy(tmpBuffer, icm_raw_data_base, 0x30);
         icm_debug(tmpBuffer, 0x30);
+#endif
 
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 
         aes_decrypt(icm_raw_data_base, req->data, req->length);
+      } else if (req->dest == STACK) {
+        // [TODO] Length has to be 0 or 1
+        memcpy(icm_raw_data_base, req->data, req->length);
       }
       /*
       memcpy(get_output_buffer(), "echo", 4);
