@@ -488,7 +488,6 @@ void handle_ecp(ECP *in) {
   if (req->opcode == COPY) {
     if (req->dest == STORAGE) {
       evm_load_storage();
-      icm_debug("sload success", 13);
     }
     else if (req->dest == STACK) {
       evm_load_stack(req->func);
@@ -542,7 +541,6 @@ void handle_ecp(ECP *in) {
 #endif
   }
   else if (req->opcode == END) {
-
     // before actually ending the run
     // print all traces
     check_debug_buffer();
@@ -687,6 +685,8 @@ void handle_ecp(ECP *in) {
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     for (int i = 0; i < req->func; i++)
       *stackOp = 0;
+
+    ready = 1;
   }
 
   // resume execution                  | only when the evm_memory_copy is finished  

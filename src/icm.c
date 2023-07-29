@@ -432,6 +432,9 @@ void icm_call(uint8_t func) {
     address_p address = evm_stack + 32;
 
     if (icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address)) {
+#ifdef ICM_DEBUG
+      icm_debug("code found locally", 18);
+#endif
       // found in local
       icm_config->ext_code_size = icm_config->found_deployed_code->length;
       icm_config->cesm_ready = 1;
@@ -439,6 +442,10 @@ void icm_call(uint8_t func) {
     } else {
       icm_config->cesm_ready = 0;
       icm_config->contract_address_waiting_for_size = address;
+#ifdef ICM_DEBUG
+      icm_debug("require code length from host", 29);
+      icm_debug(address, 20);
+#endif
     }
 
     // call target address, query from host
@@ -454,10 +461,19 @@ void icm_call(uint8_t func) {
     memcpy(ecp->data, address, sizeof(address_t));
     if (func == OP_CALLCODE || func == OP_DELEGATECALL) {
       // delegatecall use caller's storage
+#ifdef ICM_DEBUG
+      icm_debug("delegate", 8);
+#endif
       memcpy(ecp->data + sizeof(address_t), call_frame->address, sizeof(address_t));
     } else {
+#ifdef ICM_DEBUG
+      icm_debug("call", 4);
+#endif 
       memcpy(ecp->data + sizeof(address_t), address, sizeof(address_t));
     }
+#ifdef ICM_DEBUG
+      icm_debug("ready", 5);
+#endif 
     build_outgoing_packet(sizeof(ECP) + ecp->length);
   }
 }
@@ -492,10 +508,6 @@ void icm_end(uint8_t func) {
     // icm_debug(&(ecp.src_offset), 4);
     // icm_debug("length", 6);
     // icm_debug(&(ecp.length), 4);
-
-    icm_debug("returnMEM", 9);
-    aes_decrypt(icm_raw_data_base, call_frame->memory, ecp.length);
-    icm_debug(icm_raw_data_base, ecp.length);
 #endif
 
     evm_memory_copy(&ecp);
@@ -615,12 +627,6 @@ void icm_call_end_state_machine() {
     ecp.dest_offset = 0;
     ecp.length = size;
     cesm_state = CESM_WAIT_FOR_INPUT_COPY;
-
-#ifdef ICM_DEBUG
-    icm_debug("memshow", 7);
-    aes_decrypt(icm_raw_data_base, (call_frame - 1)->memory, 0x1e);
-    icm_debug(icm_raw_data_base, 0x1e);
-#endif
 
     evm_memory_copy(&ecp);
   } else if (cesm_state == CESM_WAIT_FOR_INPUT_COPY) {
@@ -927,14 +933,7 @@ uint8_t icm_decrypt() {
 #ifdef ICM_DEBUG
     icm_debug("recv code", 9);
 #endif
-
         aes_decrypt(icm_raw_data_base, req->data, req->length);
-
-#ifdef ICM_DEBUG
-        uint8_t tmpBuffer[100];
-        memcpy(tmpBuffer, icm_raw_data_base, 0x30);
-        icm_debug(tmpBuffer, 0x30);
-#endif
 
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
