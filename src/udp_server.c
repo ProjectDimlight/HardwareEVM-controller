@@ -33,9 +33,15 @@
 #include "netif/xadapter.h"
 
 extern struct netif server_netif;
-static struct udp_pcb *pcb;
 
+#ifdef TCP
+static struct tcp_pcb *pcb;
+static struct tcp_pcb *tpcb;
+#else
+static struct udp_pcb *pcb;
 static struct udp_pcb *tpcb;
+#endif
+
 static ip_addr_t taddr;
 static u16_t tport;
 
@@ -57,7 +63,7 @@ void trigger_input() {
 }
 
 uint8_t *check_incoming_packet() {
-	xemacif_input(&server_netif);
+	trigger_input();
 	// now the packet is in the input buffer, but encrypted
 	// decrypt the payloads to secure memory
 	// and set input_valid only after the signature is checked
@@ -65,11 +71,19 @@ uint8_t *check_incoming_packet() {
 }
 
 void build_outgoing_packet(uint32_t len) {
+#ifdef TCP
+	tcp_write(tpcb, buf_out, len, 1);
+	tcp_output(tpcb);
+	/*
+	while (tcp_sndbuf(tpcb) < len) {
+	}
+	*/
+#else
 	struct pbuf *obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
 	pbuf_take(obuf, buf_out, len);
-
 	udp_sendto(tpcb, obuf, &taddr, tport);
 	pbuf_free(obuf);
+#endif
 }
 
 static void build_incoming_packet(struct pbuf *p) {
@@ -90,6 +104,47 @@ static void udp_recv_packet(void *arg, struct udp_pcb *rpcb,
 	
 	pbuf_free(p);
 	return;
+}
+
+static err_t tcp_recv_callback(void *arg, struct tcp_pcb *rpcb,
+                               struct pbuf *p, err_t err)
+{
+	tpcb = rpcb;
+
+	/* do not read the packet if we are not in ESTABLISHED state */
+	if (!p) {
+		tcp_close(tpcb);
+		tcp_recv(tpcb, NULL);
+		return ERR_OK;
+	}
+
+	/* indicate that the packet has been received */
+	tcp_recved(tpcb, p->len);
+	build_incoming_packet(p);
+
+	/* free the received pbuf */
+	pbuf_free(p);
+
+	return ERR_OK;
+}
+
+static err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+	static int connection = 1;
+
+	/* set the receive callback for this connection */
+	tcp_recv(newpcb, tcp_recv_callback);
+
+	/* just use an integer number indicating the connection id as the
+	   callback argument */
+	tcp_arg(newpcb, (void*)(UINTPTR)connection);
+
+	tcp_nagle_disable(newpcb);
+
+	/* increment for subsequent accepted connections */
+	connection++;
+
+	return ERR_OK;
 }
 
 // ===================================================
@@ -191,6 +246,35 @@ void start_application(void)
 
 	err_t err;
 
+#ifdef TCP
+	/* create new TCP PCB structure */
+	pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
+	if (!pcb) {
+		xil_printf("Error creating PCB. Out of Memory\n\r");
+		return -1;
+	}
+
+	/* bind to specified @port */
+	err = tcp_bind(pcb, IP_ANY_TYPE, TCP_CONN_PORT);
+	if (err != ERR_OK) {
+		xil_printf("Unable to bind to port %d: err = %d\n\r", TCP_CONN_PORT, err);
+		return -2;
+	}
+
+	/* we do not need any arguments to callback functions */
+	tcp_arg(pcb, NULL);
+
+	/* listen for connections */
+	pcb = tcp_listen(pcb);
+	if (!pcb) {
+		xil_printf("Out of memory while tcp_listen\n\r");
+		return -3;
+	}
+
+	/* specify callback to use for incoming connections */
+	tcp_accept(pcb, tcp_accept_callback);
+#else
+
 	/* Create Server PCB */
 	pcb = udp_new();
 	if (!pcb) {
@@ -209,11 +293,11 @@ void start_application(void)
 	/* specify callback to use for incoming connections */
 	udp_recv(pcb, udp_recv_packet, NULL);
 
-	//tpcb = pcb;
-	
+	//tpcb = pcb;	
 	tpcb = pcb;
 	taddr.addr = 0x0201a8c0;
 	tport = 23333;
+#endif
 
 	return;
 }

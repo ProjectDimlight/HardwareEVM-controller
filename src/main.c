@@ -44,6 +44,9 @@ int main(void)
     check_simram();
 #endif
 
+#ifdef TCP
+    network_timer_check();
+#endif
     uint8_t *p = check_incoming_packet();
     if (p) {
       handle_ecp(p);

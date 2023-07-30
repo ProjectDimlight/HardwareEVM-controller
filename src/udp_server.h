@@ -29,18 +29,26 @@
 #ifndef __UDP_PERF_SERVER_H_
 #define __UDP_PERF_SERVER_H_
 
-#include "lwipopts.h"
-#include "lwip/ip_addr.h"
-#include "lwip/err.h"
-#include "lwip/udp.h"
-#include "lwip/inet.h"
-#include "xil_printf.h"
-#include "platform.h"
-
 #define DEFAULT_IP_ADDRESS	"192.168.1.1"
 #define DEFAULT_IP_MASK		"255.255.255.0"
 #define DEFAULT_GW_ADDRESS	"192.168.1.2"
 #define UDP_CONN_PORT 5001
+#define TCP_CONN_PORT 5001
+#define TCP
+
+#include "lwipopts.h"
+#include "lwip/ip_addr.h"
+#include "lwip/err.h"
+
+#ifdef TCP
+#include "lwip/tcp.h"
+#else
+#include "lwip/udp.h"
+#endif
+
+#include "lwip/inet.h"
+#include "xil_printf.h"
+#include "platform.h"
 
 void *get_input_buffer();
 void *get_output_buffer();
