@@ -20,6 +20,30 @@ void test_malloc() {
 }
 */
 
+int cnt = 0, led_on = 1, started = 0, fail = 0;
+uint8_t *led_ptr = 0x480000000ll;
+
+void led_and_heart_beat() {
+  cnt ++;
+  if (cnt == 1000000) {
+    cnt = 0;
+  }
+
+  if (!started) {
+    if (cnt == 0) {  
+      led_on = led_on >= 8 ? 1 : (led_on << 1);
+      *led_ptr = led_on;
+    }
+  } else {
+    *led_ptr = (fail ? 0xa : (*(char*)0x410000004 ? 0xf : 0x0));
+#ifdef ICM_DEBUG
+    if (cnt == 0) {
+      icm_debug("heart beat", 10);
+    }
+#endif
+  }
+}
+
 int main(void)
 {
   /* start the application*/
@@ -30,8 +54,6 @@ int main(void)
 
   // wait for a host
   // after receiving any packet, it will memorize the socket
-  int cnt = 0, led_on = 1, started = 0;
-  uint8_t *led_ptr = 0x480000000ll;
   *led_ptr = led_on;
 
 #ifdef SIMULATION
@@ -57,18 +79,10 @@ int main(void)
 
     check_evm_output();
     icm_call_end_state_machine();
-    check_debug_buffer();
+    // check_debug_buffer();
 
-    if (!started) {
-      cnt ++;
-      if (cnt == 1000000) {
-        cnt = 0;
-        led_on = led_on >= 8 ? 1 : (led_on << 1);
-        *led_ptr = led_on;
-      }
-    } else {
-      *led_ptr = (*(char*)0x410000004 ? 0xf : 0x0);
-    }
+    retry_timer();
+    led_and_heart_beat();
   }
 
   return 0;

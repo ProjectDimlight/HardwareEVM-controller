@@ -50,7 +50,8 @@ typedef struct __OCMStackFrame{
   address_p storage_address;    // for DELEGATECALL and CALLCODE
   address_p caller_address;     // for DELEGATECALL
   uint32_t code_length, input_length, memory_length, return_length;
-  uint32_t stack_size, ret_offset, ret_size, pc, msize, gas;
+  uint32_t stack_size, ret_offset, ret_size, pc, msize;
+  uint64_t gas;
   uint256_t value;
   uint8_t call_end_func, num_of_params;
 

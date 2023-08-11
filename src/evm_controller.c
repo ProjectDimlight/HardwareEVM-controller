@@ -331,14 +331,12 @@ void evm_memory_copy(ECP *req) {
 
   while (req->length > 0) {
 #ifdef ICM_DEBUG
-/*
-    uint8_t tmp[16];
+    uint8_t tmp[32] = {0};
     memcpy_b(tmp     , "step", 4);
-    memcpy_b(tmp + 4 , &(req->src_offset), 4);
-    memcpy_b(tmp + 8 , &(req->dest_offset), 4);
-    memcpy_b(tmp + 12, &(req->length), 4);
-    icm_debug(tmp, 16);
-*/
+    memcpy_b(tmp + 8 , &(req->src_offset), 4);
+    memcpy_b(tmp + 16, &(req->dest_offset), 4);
+    memcpy_b(tmp + 24, &(req->length), 4);
+    icm_debug(tmp, 32);
 #endif
     
     // before page
@@ -379,8 +377,14 @@ void evm_memory_copy(ECP *req) {
 #ifdef ICM_DEBUG
     icm_debug("memcopy", 7);
 #endif
+    
     memcpy_b(addr_dest, addr_src, step_length);
     *pte_dest |= 0x3;
+
+#ifdef ICM_DEBUG
+    icm_debug("copied contents", 15);
+    icm_debug(&step_length, 4);
+#endif
 
 #ifdef SIMULATION
     sleep(5);
@@ -419,20 +423,36 @@ void check_debug_buffer() {
   for (; local_debug_counter != target; local_debug_counter++) {
     // gas8, pc4, stacksize4, gap16, res32
     for (int i = 0; i < 16; i++)
-      data[i] = debug_buffer_base[(local_debug_counter & 127) * 16 + i];
+      data[i] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
 
-    memcpy_b(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+    memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
     icm_encrypt(sizeof(ECP) + 64);
   }
 }
 
+void clear_debug_buffer() {
+  uint16_t *debug_counter = (uint16_t*)(evm_cin_addr + 0xc);
+  local_debug_counter = *debug_counter;
+}
+
+uint8_t evm_has_output() {
+  ECP *p = (ECP*)evm_cout_addr;
+  return evm_active && p->opcode != NONE;
+}
+
 void handle_ecp(ECP *in) {
   ECP header;
-  memcpy(&header, in, 16);
+  memcpy_b(&header, in, 16);
   ECP *req = &header;
   in->opcode = 0;
   
   uint8_t ready = 0;
+  
+  check_debug_buffer();
+
+#ifdef ICM_DEBUG
+  icm_debug(req, 16);
+#endif
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -465,6 +485,7 @@ void handle_ecp(ECP *in) {
       return;
     }
     else if (req->opcode == DEBUG) {
+      clear_debug_buffer();
       if (req->func == 2)
         req->func = !local_debug_enable;
       local_debug_enable = req->func;
@@ -524,12 +545,20 @@ void handle_ecp(ECP *in) {
       }
     }
     else { // swap memory
+#ifdef ICM_DEBUG
+      icm_debug("swap page", 9);
+      icm_debug(req, 16);
+#endif
       if (req->func) { // has dirty page to send back
         memcpy_b(icm_raw_data_base, data_source_to_address(req->src, req->src_offset), req->length);
       } else {
         content_length = 0;
       }
       memcpy_b(get_output_buffer(), req, sizeof(ECP));
+#ifdef ICM_DEBUG
+      icm_debug("copied contents", 15);
+      icm_debug(content_length, 4);
+#endif
       ready = icm_encrypt(sizeof(ECP) + content_length);
       if (ready) {
         evm_load_memlike(req->src, req->dest_offset);
@@ -663,20 +692,28 @@ void handle_ecp(ECP *in) {
     if (req->func == 0x1c) {  // ext code copy
       evm_dump_memory();
     }
-
+#ifdef ICM_DEBUG
+    icm_debug("query", 5);
+    uint32_t* stackSize = (uint32_t*)(evm_env_stack_size);
+    uint32_t s = *stackSize;
+    icm_debug(&s, 4);
+#endif
     // queries need an address (or blockid) as param
     // which is always located at the top of the stack
     content_length = 32;
     memcpy_b(icm_raw_data_base, evm_stack_addr, content_length);
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
+    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
+    *stackOp = 0;  // pop the address
+    if (req->func == 0x1c) { // code copy
+      *stackOp = 0; *stackOp = 0; *stackOp = 0;
+    }
 
     if (icm_encrypt(sizeof(ECP) + content_length)) {
       // locally deployed code
       uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-      volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
-      *stackOp = 0;  // pop the address
       memcpy_b(stackData, icm_raw_data_base, 32);
-      *stackOp = 1;  // push the hash
+      *stackOp = 1;  // push
       ready = 1; 
     }
   }
@@ -688,9 +725,19 @@ void handle_ecp(ECP *in) {
 
     ready = 1;
   }
+  else if (req->opcode == DEBUG) {
+#ifdef ICM_DEBUG
+  icm_debug("debug triggered", 15);
+#endif
+    ready = 1;
+  }
 
   // resume execution                  | only when the evm_memory_copy is finished  
   if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || ready) {
+    // does not continue if exception from evm not yet handled
+    if (evm_has_output())
+      return;
+    
    *(char*)(evm_cin_addr + 4) = evm_active;
 #ifdef ICM_DEBUG
   icm_debug("cont", 4);
@@ -699,10 +746,9 @@ void handle_ecp(ECP *in) {
 }
 
 void check_evm_output() {
-  ECP *p = (ECP*)evm_cout_addr;
-  if (evm_active && p->opcode != NONE) {
+  if (evm_has_output()) {
     // there is an operation
     // delegate to ecp
-    handle_ecp(p);
+    handle_ecp(evm_cout_addr);
   }
 }

@@ -28,6 +28,7 @@
 
 /** Connection handle for a UDP Server session */
 
+#include "icm.h"
 #include "udp_server.h"
 #include "platform_config.h"
 #include "netif/xadapter.h"
@@ -56,6 +57,31 @@ void trigger_input() {
 	xemacif_input(&server_netif);
 }
 
+uint8_t retry_if_no_reply = 0;
+uint32_t retry_packet_length = 0;
+uint32_t retry_counter = 0;
+
+void set_retry_send() {
+	retry_if_no_reply = 1;
+}
+
+void retry_send() {
+#ifdef ICM_DEBUG
+	icm_debug("retry send", 10);
+#endif
+	build_outgoing_packet(retry_packet_length);
+}
+
+void retry_timer() {
+	if (!retry_if_no_reply) return;
+
+	if (retry_counter == 0) {
+		retry_send();
+	} else {
+		retry_counter--;
+	}
+}
+
 uint8_t *check_incoming_packet() {
 	xemacif_input(&server_netif);
 	// now the packet is in the input buffer, but encrypted
@@ -64,15 +90,50 @@ uint8_t *check_incoming_packet() {
 	return input_valid && icm_decrypt() ? (input_valid = 0, buf_in) : (input_valid = 0, NULL);
 }
 
-void build_outgoing_packet(uint32_t len) {
-	struct pbuf *obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
-	pbuf_take(obuf, buf_out, len);
+extern int fail;
+extern uint8_t *led_ptr;
 
-	udp_sendto(tpcb, obuf, &taddr, tport);
+void build_outgoing_packet(uint32_t len) {
+	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
+	struct pbuf *obuf = NULL;
+	obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+
+	if (obuf == NULL) {
+		while (1) {	
+			fail = 1;
+			*led_ptr = 0x1;
+		}
+		return;
+	}
+
+	err_t err = pbuf_take(obuf, buf_out, len);
+	if (err != ERR_OK) {
+		while (1) {	
+			fail = 1;
+			*led_ptr = 0x2;
+		}
+		return;
+	}
+
+	err = udp_sendto(tpcb, obuf, &taddr, tport);
+	if (err != ERR_OK) {
+		while (1) {	
+			fail = 1;
+			*led_ptr = 0x3;
+		}
+		return;
+	}
+
 	pbuf_free(obuf);
+
+	retry_packet_length = len;
+	retry_counter = 100000;
 }
 
 static void build_incoming_packet(struct pbuf *p) {
+	// received
+	retry_if_no_reply = 0;
+
 	input_valid = 1;
 	input_size = p->tot_len;
 	pbuf_copy_partial(p, buf_in, input_size, 0);

@@ -2,6 +2,7 @@
 #define __EVM_CONTROLLER_H_
 
 // #define SIMULATION
+#include <stdint.h>
 
 #define PAGE_SIZE 1024
 #define NUMBER_OF_PAGES 4
