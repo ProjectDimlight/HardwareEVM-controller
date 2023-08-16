@@ -96,7 +96,7 @@ extern uint8_t *led_ptr;
 void build_outgoing_packet(uint32_t len) {
 	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
 	struct pbuf *obuf = NULL;
-	obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+	obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_POOL);
 
 	if (obuf == NULL) {
 		while (1) {	

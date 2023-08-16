@@ -412,6 +412,13 @@ void icm_get_address_for_create2(uint8_t *address_output, uint8_t *code_hash, ui
 
 ///////////////////////////////////////////////////////////////////
 
+uint8_t address_is_precompiled(address_p address) {
+  for (int i = 1; i < 20; i++) {
+    if (address[i] != 0) return 0;
+  }
+  return 0x1 <= address[0] && address[0] <= 0xa;
+}
+
 void icm_call(uint8_t func) {
   // CALL
   // get next level code size
@@ -442,6 +449,8 @@ void icm_call(uint8_t func) {
       icm_config->ext_code_size = icm_config->found_deployed_code->length;
       icm_config->cesm_ready = 1;
       icm_config->contract_address_waiting_for_size = NULL;
+    } else if (address_is_precompiled(address)) {
+      
     } else {
       icm_config->cesm_ready = 0;
       icm_config->contract_address_waiting_for_size = address;
@@ -474,10 +483,15 @@ void icm_call(uint8_t func) {
 #endif 
       memcpy(ecp->data + sizeof(address_t), address, sizeof(address_t));
     }
+
 #ifdef ICM_DEBUG
-      icm_debug("ready", 5);
+    icm_debug("ready", 5);
 #endif 
     build_outgoing_packet(sizeof(ECP) + ecp->length);
+
+#ifdef ICM_DEBUG
+    icm_debug("sent", 4);
+#endif 
   }
 }
 
@@ -567,7 +581,7 @@ void icm_call_end_state_machine() {
       gas = *(uint64_t*)(evm_stack);
       callee_address = evm_stack + 32;
       callee_storage_address = (func == OP_DELEGATECALL ? call_frame->storage_address : SELF_ADDRESS);
-      callee_caller_address = call_frame->storage_address;
+      callee_caller_address = (func == OP_DELEGATECALL ? call_frame->caller_address : call_frame->storage_address);
       value = icm_config->zero;
       code_length = icm_config->ext_code_size;
       input_length = *(uint32_t*)(evm_stack + 32 * 3);
@@ -700,7 +714,6 @@ void icm_call_end_state_machine() {
 
     OCMStackFrame* deployFrame = call_frame - 1;
     uint8_t end_func = call_frame->call_end_func;
-
     if (deployFrame->call_end_func == OP_CREATE || deployFrame->call_end_func == OP_CREATE2) {
 #ifdef ICM_DEBUG
     icm_debug("deploy", 6);
@@ -724,6 +737,7 @@ void icm_call_end_state_machine() {
       icm_debug("deploy finish", 13);
 #endif
     }
+
     icm_stack_pop();
     if (icm_stack_is_empty()) {
       // Finish

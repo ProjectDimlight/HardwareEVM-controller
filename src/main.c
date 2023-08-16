@@ -38,7 +38,7 @@ void led_and_heart_beat() {
     *led_ptr = (fail ? 0xa : (*(char*)0x410000004 ? 0xf : 0x0));
 #ifdef ICM_DEBUG
     if (cnt == 0) {
-      icm_debug("heart beat", 10);
+      // icm_debug("heart beat", 10);
     }
 #endif
   }
