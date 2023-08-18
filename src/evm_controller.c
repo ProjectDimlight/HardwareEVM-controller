@@ -689,9 +689,6 @@ void handle_ecp(ECP *in) {
     icm_encrypt(sizeof(ECP));
   }
   else if (req->opcode == QUERY) {
-    if (req->func == 0x1c) {  // ext code copy
-      evm_dump_memory();
-    }
 #ifdef ICM_DEBUG
     icm_debug("query", 5);
     uint32_t* stackSize = (uint32_t*)(evm_env_stack_size);
@@ -705,8 +702,9 @@ void handle_ecp(ECP *in) {
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     *stackOp = 0;  // pop the address
-    if (req->func == 0x1c) { // code copy
+    if (req->func == 0x1c) { // ext code copy
       *stackOp = 0; *stackOp = 0; *stackOp = 0;
+      evm_dump_memory();
     }
 
     if (icm_encrypt(sizeof(ECP) + content_length)) {

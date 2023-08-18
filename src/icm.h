@@ -16,14 +16,17 @@ typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
 
 enum ICMFunc{
+  ICM_FINISH = 0,
   ICM_CLEAR_STORAGE = 1,
   ICM_SET_USER_PUB, 
-  ICM_SET_CONTRACT
+  ICM_SET_CONTRACT,
 };
 
 enum CESMStates{
   CESM_IDLE,
   CESM_WAIT_FOR_CODE_SIZE,
+  CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY,
+  CESM_WAIT_FOR_PRECOMPILED_EXECUTION,
   CESM_WAIT_FOR_INPUT_COPY,
   CESM_WAIT_FOR_RETURN_COPY,
   CESM_WAIT_FOR_MEMORY_COPY
@@ -105,6 +108,7 @@ typedef struct {
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
 
   address_p contract_address_waiting_for_size;
+  uint8_t calling_precompiled;
 
   ////////////////////////////////////////////
 
