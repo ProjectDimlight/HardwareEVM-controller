@@ -80,6 +80,35 @@ uint32_t icm_find(uint256_t key) {
     return hash;
 }
 
+void icm_dump_storage() {
+  // dump storage from OCM to HOST
+  ECP *res = get_output_buffer();
+  //memcpy(res, req, sizeof(ECP));
+  res->opcode = COPY;
+  res->src = STORAGE;
+  res->dest = HOST;
+  res->func = 1;
+  res->src_offset = 0;
+  res->dest_offset = 0;
+
+  uint64_t count = 0, content_length = 4;
+  for (uint64_t i = 0; i < storage_prime; i++)
+  if (icm_temp_storage->valid[i]) {
+    memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), 84);
+    count++; content_length += 84;
+    icm_temp_storage->valid[i] = 0;
+  }
+  // finalize: send remaining records
+  res->length = content_length;
+  *(uint32_t*)res->data = count;
+
+  // encrypt storage elements
+  // uint32_t sign_offset = 4 + aes_encrypt(res->data + 4, icm_raw_data_base + 4, content_length - 4);
+  // content_length = sign_offset;
+
+  build_outgoing_packet(sizeof(ECP) + content_length);
+}
+
 ///////////////////////////////////////////////////////////////////
 
 uint32_t page_length(uint32_t length) {
@@ -166,7 +195,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->msize = 0;
   call_frame->pc = 0;
   call_frame->gas = gas;
-  memcpy(call_frame->value, value, sizeof(uint256_t));
+  memcpy_b(call_frame->value, value, sizeof(uint256_t));
 
 #ifdef ICM_DEBUG
   icm_debug("call frame set meta", 19);
@@ -238,7 +267,7 @@ void icm_stack_pop() {
     memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
     memcpy_b(evm_env_value,               call_frame->value, sizeof(uint256_t));
     
-    memcpy_b(evm_env_address, call_frame->address, sizeof(address_t));
+    memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
     memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
   }
 
@@ -370,15 +399,27 @@ void icm_record_history() {
 ///////////////////////////////////////////////////////////////////
 
 void icm_code_hash(uint8_t *code_hash_output, uint8_t *code_page, uint32_t code_length) {
+  #ifdef ICM_DEBUG
+    int show_code = 0;
+    if (code_length < 1024) {
+      show_code = 1;
+      icm_debug("code", 8);
+    }
+  #endif
+
   // The code is the content of the returndata
   keccak_256_init();
   // here just test for keccak256 lib, only 1 page code
   for (uint32_t i = 0; i < code_length; i += PAGE_SIZE) {
     uint32_t len = i + PAGE_SIZE < code_length ? PAGE_SIZE : code_length - i;
     aes_decrypt(icm_raw_data_base, code_page, len);
+    if (show_code) {
+      icm_debug(icm_raw_data_base, len);
+    }
     keccak_256_update(icm_raw_data_base, len);
   }
   keccak_256_finalize(code_hash_output);
+  
   #ifdef ICM_DEBUG
     icm_debug("codehash", 8);
     icm_debug(code_hash_output, 32);
@@ -404,6 +445,7 @@ void icm_get_address_for_create2(uint8_t *address_output, uint8_t *code_hash, ui
   keccak_256_finalize(address);
   for (int i = 0; i < 20; i++)
     address_output[i] = address[31 - i];
+
 #ifdef ICM_DEBUG
   icm_debug("deployaddr", 10);
   icm_debug(address_output, 20);
@@ -425,7 +467,7 @@ void icm_call(uint8_t func) {
   call_frame->call_end_func = func;
   uint8_t *evm_stack = call_frame->stack;
   cesm_state = CESM_WAIT_FOR_CODE_SIZE;
-  icm_config->calling_precompiled = false;
+  icm_config->calling_precompiled = 0;
 
   if (func == OP_CREATE || func == OP_CREATE2) {
     if (func == OP_CREATE) {
@@ -455,7 +497,7 @@ void icm_call(uint8_t func) {
       icm_debug("precompiled", 11);
 #endif
       icm_config->ext_code_size = 0;
-      icm_config->calling_precompiled = true;
+      icm_config->calling_precompiled = 1;
       icm_config->cesm_ready = 1;
       icm_config->contract_address_waiting_for_size = NULL;
     } else {
@@ -526,7 +568,7 @@ void icm_end(uint8_t func) {
   } else {
     // no need for copy
     icm_config->cesm_ready = 1;
-    icm_config->immutable_page_length = 0;
+    icm_config->immutable_page_length = (call_frame - 1)->return_length = 0;
   }
 }
 
@@ -579,7 +621,11 @@ void icm_call_end_state_machine() {
       callee_address = evm_stack + 32;
       callee_storage_address = (func == OP_DELEGATECALL ? call_frame->storage_address : SELF_ADDRESS);
       callee_caller_address = (func == OP_DELEGATECALL ? call_frame->caller_address : call_frame->storage_address);
-      value = icm_config->zero;
+      if (func == OP_DELEGATECALL) {
+        value = evm_env_value;
+      } else {
+        value = icm_config->zero;
+      }
       code_length = icm_config->ext_code_size;
       input_length = *(uint32_t*)(evm_stack + 32 * 3);
       offset = *(uint32_t*)(evm_stack + 32 * 2);
@@ -868,6 +914,10 @@ void icm_call_end_state_machine() {
     aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * new_stack_size);
     evm_load_stack(1);
 
+    if (icm_config->calling_precompiled) {
+      memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
+      icm_config->calling_precompiled = 0;
+    } else
     {
       ECP *ecp = get_output_buffer();
       ecp->opcode = ICM;
@@ -901,6 +951,9 @@ uint8_t icm_decrypt() {
   ECP *req = get_input_buffer();
   
   if (req->opcode == ICM) {
+#ifdef ICM_DEBUG
+    icm_debug("icm", 3);
+#endif
     if (req->func == ICM_CLEAR_STORAGE) {
       icm_clear_storage();
     } else if (req->func == ICM_SET_USER_PUB) {
@@ -911,9 +964,13 @@ uint8_t icm_decrypt() {
         icm_config->contract_address_waiting_for_size = NULL;
         icm_config->ext_code_size = req->length;
         icm_step();
-      } else if (req->func == ICM_FINISH) {
-        icm_step();
-      }
+      }  
+    } else if (req->func == ICM_FINISH) {
+#ifdef ICM_DEBUG
+      icm_debug("received precompiled return value", 33);
+      icm_debug(&(icm_config->immutable_page_length), 4);
+#endif
+      icm_step();
     }
     return 0;
   } else if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
@@ -973,26 +1030,7 @@ uint8_t icm_decrypt() {
     return 1;
   } else {
     if (req->src == STORAGE) { // this request is sent from host
-      // dump storage from OCM to HOST
-      ECP *res = get_output_buffer();
-      memcpy(res, req, sizeof(ECP));
-
-      uint64_t count = 0, content_length = 4;
-      for (uint64_t i = 0; i < storage_prime; i++)
-      if (icm_temp_storage->valid[i]) {
-        memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), 84);
-        count++; content_length += 84;
-      }
-      // finalize: send remaining records
-      res->func = 1;
-      res->length = content_length;
-      *(uint32_t*)res->data = count;
-
-      // encrypt storage elements
-      uint32_t sign_offset = 4 + aes_encrypt(req->data + 4, icm_raw_data_base + 4, content_length - 4);
-      content_length = sign_offset;
-
-      build_outgoing_packet(sizeof(ECP) + content_length);
+      icm_dump_storage();
       return 0;
     } else if (req->dest == STORAGE) {
       // load storage from host to OCM
@@ -1065,12 +1103,16 @@ uint8_t icm_decrypt() {
         // [TODO] Length has to be 0 or 1
         memcpy(icm_raw_data_base, req->data, req->length);
       } else if (req->dest == RETURNDATA && cesm_state == CESM_WAIT_FOR_PRECOMPILED_EXECUTION) {
+#ifdef ICM_DEBUG
+    icm_debug("recv precompiled results", 24);
+#endif
         if (req->length < PAGE_SIZE) {
           memset(req->data + req->length, 0, PAGE_SIZE - req->length);
         }
         aes_encrypt(icm_config->immutable_page + req->dest_offset, req->data, req->length);
         if (icm_config->immutable_page_length < req->dest_offset + req->length)
           icm_config->immutable_page_length = req->dest_offset + req->length;
+        return 0;
       }
       /*
       memcpy(get_output_buffer(), "echo", 4);
@@ -1095,7 +1137,7 @@ uint8_t icm_encrypt(uint32_t length) {
     OCMDeployedCodeFrame *p = icm_find_locally_deployed_contract_code(icm_raw_data_base);
     if (p) {
       if (req->func == 0x1b) {
-        memcpy(icm_raw_data_base, p->length, 4);
+        memcpy(icm_raw_data_base, &(p->length), 4);
         memset(icm_raw_data_base + 4, 0, sizeof(uint256_t) - 4);
 #ifdef ICM_DEBUG
         icm_debug("found locally", 13);
@@ -1133,15 +1175,23 @@ uint8_t icm_encrypt(uint32_t length) {
 
         for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
           uint32_t id = icm_find(base + offset);
+
           if (id == storage_prime) {
-            // [TODO] OCM full swap
+            icm_dump_storage();
+            id = icm_find(base + offset);
           }
 
           // OCM need not encryption
           icm_temp_storage->valid[id] = 1;
-          memcpy(&(icm_temp_storage->record[id]), base + offset, 64);
+          memcpy(&(icm_temp_storage->record[id].k), base + offset + 0 , 32);
+          memcpy(&(icm_temp_storage->record[id].v), base + offset + 32, 32);
           // also, copy the address of the current contract
           memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
+
+#ifdef ICM_DEBUG
+          icm_debug(&(icm_temp_storage->record[id].k), 32);
+          icm_debug(&(icm_temp_storage->record[id].v), 32);
+#endif
         }
 
         // nothing to be sent out
@@ -1157,7 +1207,8 @@ uint8_t icm_encrypt(uint32_t length) {
         if (num_of_items) {
           uint32_t id = icm_find(base);
           if (id == storage_prime) {
-            // [TODO] OCM full swap
+            icm_dump_storage();
+            id = icm_find(base);
           }
 
           // OCM need no encryption
@@ -1173,7 +1224,7 @@ uint8_t icm_encrypt(uint32_t length) {
         // 0. check in OCM
 
         uint32_t id = icm_find(base + 4);
-        if (icm_temp_storage->valid[id]) {
+        if (id != storage_prime && icm_temp_storage->valid[id]) {
           // found, do not send output request
           memcpy(icm_raw_data_base, base, 4 + 32);
           memcpy(icm_raw_data_base + 4 + 32, icm_temp_storage->record[id].v, 32);
@@ -1272,11 +1323,14 @@ uint8_t icm_encrypt(uint32_t length) {
             }
           }
           if (req->src == OCM_IMMUTABLE_MEM && cesm_state == CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY) {
+#ifdef ICM_DEBUG
+            icm_debug("precompiled input copy", 22);
+#endif
             ECP *ecp = get_output_buffer();
             ecp->opcode = COPY;
             ecp->src = CALLDATA;
             ecp->dest = HOST;
-            ecp->func = 1;
+            ecp->func = 2;
             ecp->src_offset = req->src_offset;
             ecp->dest_offset = req->dest_offset;
             ecp->length = content_length;
