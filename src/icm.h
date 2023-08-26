@@ -29,7 +29,8 @@ enum CESMStates{
   CESM_WAIT_FOR_PRECOMPILED_EXECUTION,
   CESM_WAIT_FOR_INPUT_COPY,
   CESM_WAIT_FOR_RETURN_COPY,
-  CESM_WAIT_FOR_MEMORY_COPY
+  CESM_WAIT_FOR_MEMORY_COPY,
+  CESM_WAIT_FOR_BALANCE
 };
 
 typedef struct __OCMDeployedCodeFrame{
@@ -108,6 +109,7 @@ typedef struct {
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
 
   address_p contract_address_waiting_for_size;
+  uint256_t contract_balance_after_transfer;
   uint8_t calling_precompiled;
 
   ////////////////////////////////////////////

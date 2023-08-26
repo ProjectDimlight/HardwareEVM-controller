@@ -47,6 +47,7 @@ void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
 void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
 void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
 void* const evm_env_value            = evm_env_addr + 0x14 * 32;
+void* const evm_env_balance          = evm_env_addr + 0x07 * 32;
 void* const evm_env_code_size        = evm_env_addr + 0x18 * 32;
 void* const evm_env_calldata_size    = evm_env_addr + 0x16 * 32;
 void* const evm_env_returndata_size  = evm_env_addr + 0x1d * 32;

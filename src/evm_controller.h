@@ -22,6 +22,7 @@ extern void* const evm_env_pc;
 extern void* const evm_env_gas;
 extern void* const evm_env_msize;
 extern void* const evm_env_value;
+extern void* const evm_env_balance;
 extern void* const evm_env_code_size;
 extern void* const evm_env_calldata_size;
 extern void* const evm_env_returndata_size;

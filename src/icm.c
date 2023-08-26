@@ -145,7 +145,7 @@ OCMDeployedCodeFrame *icm_find_locally_deployed_contract_code(address_p addr) {
   return NULL;
 }
 
-void icm_stack_push(address_t callee_address, address_p callee_storage_address, address_p callee_caller_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value) {
+void icm_stack_push(address_t callee_address, address_p callee_storage_address, address_p callee_caller_address, uint32_t code_length, uint32_t input_length, uint64_t gas, uint256_t value, uint256_t balance) {
 #ifdef ICM_DEBUG
     icm_debug("call stack push", 15);
 #endif
@@ -236,6 +236,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     memcpy_b(evm_env_gas,               &(call_frame->gas), 8);
     memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
     memcpy_b(evm_env_value,               call_frame->value, sizeof(uint256_t));
+    memcpy_b(evm_env_balance,             balance, sizeof(uint256_t));
     
     memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
     memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
@@ -461,6 +462,21 @@ uint8_t address_is_precompiled(address_p address) {
   return 0x1 <= address[0] && address[0] <= 0x9;
 }
 
+void icm_switch_contract(address_p address, address_p storage_address, void *value) {
+  ECP *ecp = get_output_buffer();
+  ecp->opcode = ICM;
+  ecp->src = CONTROL;
+  ecp->dest = HOST;
+  ecp->func = ICM_SET_CONTRACT;
+  ecp->src_offset = 0;
+  ecp->dest_offset = 0;
+  ecp->length = (sizeof(address_t) << 1) + 32;
+  memcpy(ecp->data, address, sizeof(address_t));
+  memcpy(ecp->data + sizeof(address_t), storage_address, sizeof(address_t));
+  memcpy(ecp->data + (sizeof(address_t) << 1), value, 32);
+  build_outgoing_packet(sizeof(ECP) + ecp->length);
+}
+
 void icm_call(uint8_t func) {
   // CALL
   // get next level code size
@@ -483,6 +499,7 @@ void icm_call(uint8_t func) {
 #endif
   } else {
     address_p address = evm_stack + 32;
+    icm_config->cesm_ready = 0;
 
     if (icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address)) {
 #ifdef ICM_DEBUG
@@ -490,7 +507,6 @@ void icm_call(uint8_t func) {
 #endif
       // found locally
       icm_config->ext_code_size = icm_config->found_deployed_code->length;
-      icm_config->cesm_ready = 1;
       icm_config->contract_address_waiting_for_size = NULL;
     } else if (address_is_precompiled(address)) {
 #ifdef ICM_DEBUG
@@ -498,45 +514,22 @@ void icm_call(uint8_t func) {
 #endif
       icm_config->ext_code_size = 0;
       icm_config->calling_precompiled = 1;
-      icm_config->cesm_ready = 1;
       icm_config->contract_address_waiting_for_size = NULL;
     } else {
 #ifdef ICM_DEBUG
       icm_debug("require code length from host", 29);
       icm_debug(address, 20);
 #endif
-      icm_config->cesm_ready = 0;
       icm_config->contract_address_waiting_for_size = address;
     }
 
     // call target address, query from host
     // send ICM_SET_CONTRACT
-    ECP *ecp = get_output_buffer();
-    ecp->opcode = ICM;
-    ecp->src = CONTROL;
-    ecp->dest = HOST;
-    ecp->func = ICM_SET_CONTRACT;
-    ecp->src_offset = 0;
-    ecp->dest_offset = 0;
-    ecp->length = sizeof(address_t) * 2;
-    memcpy(ecp->data, address, sizeof(address_t));
-    if (func == OP_CALLCODE || func == OP_DELEGATECALL) {
-      // delegatecall use caller's storage
-#ifdef ICM_DEBUG
-      icm_debug("delegate", 8);
-#endif
-      memcpy(ecp->data + sizeof(address_t), call_frame->storage_address, sizeof(address_t));
-    } else {
-#ifdef ICM_DEBUG
-      icm_debug("call", 4);
-#endif 
-      memcpy(ecp->data + sizeof(address_t), address, sizeof(address_t));
-    }
-    build_outgoing_packet(sizeof(ECP) + ecp->length);
-
-#ifdef ICM_DEBUG
-    icm_debug("sent", 4);
-#endif 
+    icm_switch_contract(
+      address,
+      (func == OP_CALLCODE || func == OP_DELEGATECALL) ? call_frame->storage_address : address,
+      (func == OP_CALLCODE || func == OP_CALL) ? evm_stack + 64 : icm_config->zero
+    );
   }
 }
 
@@ -582,14 +575,8 @@ void icm_call_end_state_machine() {
     icm_config->cesm_ready = 0;
   } else if (cesm_state == CESM_WAIT_FOR_CODE_SIZE) {
     // CALL
-    // wait until code size is received
+    // wait until code size & balance are received
     if (icm_config->cesm_ready == 0) {
-      /*
-      if (call_frame->call_end_func == OP_CREATE ||
-          call_frame->call_end_func == OP_CREATE2) {
-        evm_memory_copy(NULL);
-      }
-      */
       return;
     }
     // the code length is set
@@ -644,12 +631,14 @@ void icm_call_end_state_machine() {
       size = *(uint32_t*)(evm_stack + 32 * 2);
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
+      
+      memcpy(icm_config->contract_balance_after_transfer, value, 32);
     }
 
 #ifdef ICM_DEBUG
-    icm_debug("callOff", 7);
+    icm_debug("call offset", 11);
     icm_debug(&offset, 4);
-    icm_debug("callSize", 8);
+    icm_debug("call size", 9);
     icm_debug(&size, 4);
 #endif
 
@@ -668,8 +657,8 @@ void icm_call_end_state_machine() {
       cesm_state = CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY;
     } else {
       // stack push
-      icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value);
-  #ifdef ICM_DEBUG
+      icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value, icm_config->contract_balance_after_transfer);
+#ifdef ICM_DEBUG
       icm_debug("address:", 8);
       icm_debug(callee_address, 20);
       icm_debug(callee_storage_address, 20);
@@ -678,7 +667,11 @@ void icm_call_end_state_machine() {
       icm_debug("length:", 7);
       icm_debug(&code_length, 4);
       icm_debug(&input_length, 4);
-  #endif
+
+      icm_debug("value:", 6);
+      icm_debug(value, 32);
+      icm_debug(icm_config->contract_balance_after_transfer, 32);
+#endif
 
       // copy memory as code (CREATE) or input (CALL)
       if (func == OP_CREATE || func == OP_CREATE2) {  
@@ -737,7 +730,7 @@ void icm_call_end_state_machine() {
     }
 
     call_frame->return_length = icm_config->immutable_page_length;
-    memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
+    memcpy_b(evm_env_returndata_size, &(call_frame->return_length), 4);
 
     // Resume
     cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
@@ -774,6 +767,13 @@ void icm_call_end_state_machine() {
       icm_code_hash(code_hash, call_frame->code, call_frame->code_length);
       icm_get_address_for_create2(call_frame->address, code_hash, sender_address, salt);
       memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
+
+      // transfer call value
+      icm_switch_contract(
+        call_frame->address,
+        call_frame->address,
+        caller_frame->stack
+      );
     }
 
 #ifdef ICM_DEBUG
@@ -915,22 +915,39 @@ void icm_call_end_state_machine() {
     evm_load_stack(1);
 
     if (icm_config->calling_precompiled) {
-      memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
+      memcpy_b(evm_env_pc, &(call_frame->pc), 4);
       icm_config->calling_precompiled = 0;
-    } else
-    {
-      ECP *ecp = get_output_buffer();
-      ecp->opcode = ICM;
-      ecp->src = CONTROL;
-      ecp->dest = HOST;
-      ecp->func = ICM_SET_CONTRACT;
-      ecp->src_offset = 0;
-      ecp->dest_offset = 0;
-      ecp->length = sizeof(address_t) * 2;
-      memcpy(ecp->data, call_frame->address, sizeof(address_t));
-      memcpy(ecp->data + sizeof(address_t), call_frame->storage_address, sizeof(address_t));
-      build_outgoing_packet(sizeof(ECP) + ecp->length);
     }
+
+    cesm_state = CESM_WAIT_FOR_BALANCE;
+    icm_config->cesm_ready = 0;
+    icm_switch_contract(
+      call_frame->address,
+      call_frame->storage_address,
+      icm_config->zero
+    );
+  } else if (cesm_state == CESM_WAIT_FOR_BALANCE) {
+    if (icm_config->cesm_ready == 0) {
+      return;
+    }
+
+#ifdef ICM_DEBUG
+      icm_debug("address:", 8);
+      icm_debug(callee_address, 20);
+      icm_debug(callee_storage_address, 20);
+      icm_debug(callee_caller_address, 20);
+      
+      icm_debug("length:", 7);
+      icm_debug(&code_length, 4);
+      icm_debug(&input_length, 4);
+
+      icm_debug("value:", 6);
+      icm_debug(value, 32);
+      icm_debug(icm_config->contract_balance_after_transfer, 32);
+#endif
+
+    // set balance
+    memcpy_b(evm_env_balance, icm_config->contract_balance_after_transfer, 32);
 
     // resume
     cesm_state = CESM_IDLE;
@@ -963,6 +980,7 @@ uint8_t icm_decrypt() {
         memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
         icm_config->contract_address_waiting_for_size = NULL;
         icm_config->ext_code_size = req->length;
+        memcpy(icm_config->contract_balance_after_transfer, req->data + 20, 32);
         icm_step();
       }  
     } else if (req->func == ICM_FINISH) {
