@@ -150,6 +150,12 @@ void evm_load_stack(uint8_t func) {
   for (int i = 0; i < numItem; i++, data -= 32) {
     memcpy_b(stackData, data, 32);
     *stackOp = 1;
+
+    if (numItem == 1) {
+      uint8_t tmp[32];
+      memcpy_b(tmp, evm_stack_addr, 32);
+      icm_debug(tmp, 32);
+    }
   }
 }
 
@@ -183,6 +189,13 @@ void evm_load_storage() {
     slot[0] = (data[offset] & 0xffffffc0) + 0x1;
     for (int j = 1; j < 16; j++)
       slot[j] = data[offset + j];
+
+      
+    if (numItem == 1) {
+      uint8_t tmp[64];
+      memcpy_b(tmp, slot, 64);
+      icm_debug(tmp, 64);
+    }
   }
 }
 
@@ -447,13 +460,14 @@ void handle_ecp(ECP *in) {
   ECP *req = &header;
   in->opcode = 0;
   
-  uint8_t ready = 0;
+  uint8_t ready = 0, wait_for_query = 0;
   
   check_debug_buffer();
 
 #ifdef ICM_DEBUG
   icm_debug(req, 16);
 #endif
+  icm_debug(req, 16);
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -513,6 +527,7 @@ void handle_ecp(ECP *in) {
     }
     else if (req->dest == STACK) {
       evm_load_stack(req->func);
+      wait_for_query = 0;
     }
     else { // Memory
       if (req->src == HOST) {
@@ -714,6 +729,8 @@ void handle_ecp(ECP *in) {
       memcpy_b(stackData, icm_raw_data_base, 32);
       *stackOp = 1;  // push
       ready = 1; 
+    } else {
+      wait_for_query = 1;
     }
   }
   else if (req->opcode == LOG) {
@@ -732,7 +749,7 @@ void handle_ecp(ECP *in) {
   }
 
   // resume execution                  | only when the evm_memory_copy is finished  
-  if ((req->dest != HOST && !pending_evm_memory_copy_request.valid) || ready) {
+  if ((req->dest != HOST && !wait_for_query && !pending_evm_memory_copy_request.valid) || ready) {
     // does not continue if exception from evm not yet handled
     if (evm_has_output())
       return;

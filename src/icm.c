@@ -236,7 +236,8 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     memcpy_b(evm_env_gas,               &(call_frame->gas), 8);
     memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
     memcpy_b(evm_env_value,               call_frame->value, sizeof(uint256_t));
-    memcpy_b(evm_env_balance,             balance, sizeof(uint256_t));
+    if (balance)
+      memcpy_b(evm_env_balance,             balance, sizeof(uint256_t));
     
     memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
     memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
@@ -414,9 +415,11 @@ void icm_code_hash(uint8_t *code_hash_output, uint8_t *code_page, uint32_t code_
   for (uint32_t i = 0; i < code_length; i += PAGE_SIZE) {
     uint32_t len = i + PAGE_SIZE < code_length ? PAGE_SIZE : code_length - i;
     aes_decrypt(icm_raw_data_base, code_page, len);
+  #ifdef ICM_DEBUG
     if (show_code) {
       icm_debug(icm_raw_data_base, len);
     }
+  #endif
     keccak_256_update(icm_raw_data_base, len);
   }
   keccak_256_finalize(code_hash_output);
@@ -463,6 +466,7 @@ uint8_t address_is_precompiled(address_p address) {
 }
 
 void icm_switch_contract(address_p address, address_p storage_address, void *value) {
+  icm_config->contract_address_waiting_for_size = address;
   ECP *ecp = get_output_buffer();
   ecp->opcode = ICM;
   ecp->src = CONTROL;
@@ -471,9 +475,11 @@ void icm_switch_contract(address_p address, address_p storage_address, void *val
   ecp->src_offset = 0;
   ecp->dest_offset = 0;
   ecp->length = (sizeof(address_t) << 1) + 32;
+
   memcpy(ecp->data, address, sizeof(address_t));
   memcpy(ecp->data + sizeof(address_t), storage_address, sizeof(address_t));
   memcpy(ecp->data + (sizeof(address_t) << 1), value, 32);
+
   build_outgoing_packet(sizeof(ECP) + ecp->length);
 }
 
@@ -507,20 +513,17 @@ void icm_call(uint8_t func) {
 #endif
       // found locally
       icm_config->ext_code_size = icm_config->found_deployed_code->length;
-      icm_config->contract_address_waiting_for_size = NULL;
     } else if (address_is_precompiled(address)) {
 #ifdef ICM_DEBUG
       icm_debug("precompiled", 11);
 #endif
       icm_config->ext_code_size = 0;
       icm_config->calling_precompiled = 1;
-      icm_config->contract_address_waiting_for_size = NULL;
     } else {
 #ifdef ICM_DEBUG
       icm_debug("require code length from host", 29);
       icm_debug(address, 20);
 #endif
-      icm_config->contract_address_waiting_for_size = address;
     }
 
     // call target address, query from host
@@ -932,18 +935,8 @@ void icm_call_end_state_machine() {
     }
 
 #ifdef ICM_DEBUG
-      icm_debug("address:", 8);
-      icm_debug(callee_address, 20);
-      icm_debug(callee_storage_address, 20);
-      icm_debug(callee_caller_address, 20);
-      
-      icm_debug("length:", 7);
-      icm_debug(&code_length, 4);
-      icm_debug(&input_length, 4);
-
-      icm_debug("value:", 6);
-      icm_debug(value, 32);
-      icm_debug(icm_config->contract_balance_after_transfer, 32);
+    icm_debug("remainning value:", 17);
+    icm_debug(icm_config->contract_balance_after_transfer, 32);
 #endif
 
     // set balance
@@ -1040,7 +1033,7 @@ uint8_t icm_decrypt() {
     icm_debug(&input_length, 4);
 #endif
 
-    icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value);
+    icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value, NULL);
 
     return 1;
   } else if (req->opcode == END) {
@@ -1390,9 +1383,9 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("received", 8);
 #endif
               aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+              icm_debug(icm_raw_data_base, PAGE_SIZE);
             } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
-#ifdef ICM_DEBUG
-              icm_debug("deployed", 8);
+#ifdef ICM_DEBUGD
 #endif             
               aes_decrypt(icm_raw_data_base, icm_config->call_frame_pointer->locally_deployed_contract_code->code + req->dest_offset, PAGE_SIZE);
             } else {
