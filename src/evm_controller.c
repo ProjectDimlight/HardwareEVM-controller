@@ -150,12 +150,6 @@ void evm_load_stack(uint8_t func) {
   for (int i = 0; i < numItem; i++, data -= 32) {
     memcpy_b(stackData, data, 32);
     *stackOp = 1;
-
-    if (numItem == 1) {
-      uint8_t tmp[32];
-      memcpy_b(tmp, evm_stack_addr, 32);
-      icm_debug(tmp, 32);
-    }
   }
 }
 
@@ -575,7 +569,7 @@ void handle_ecp(ECP *in) {
       memcpy_b(get_output_buffer(), req, sizeof(ECP));
 #ifdef ICM_DEBUG
       icm_debug("copied contents", 15);
-      icm_debug(content_length, 4);
+      icm_debug(&content_length, 4);
 #endif
       ready = icm_encrypt(sizeof(ECP) + content_length);
       if (ready) {
@@ -755,7 +749,6 @@ void handle_ecp(ECP *in) {
     // does not continue if exception from evm not yet handled
     if (evm_has_output())
       return;
-    
    *(char*)(evm_cin_addr + 4) = evm_active;
 #ifdef ICM_DEBUG
   icm_debug("cont", 4);

@@ -475,11 +475,9 @@ void icm_switch_contract(address_p address, address_p storage_address, void *val
   ecp->src_offset = 0;
   ecp->dest_offset = 0;
   ecp->length = (sizeof(address_t) << 1) + 32;
-
   memcpy(ecp->data, address, sizeof(address_t));
   memcpy(ecp->data + sizeof(address_t), storage_address, sizeof(address_t));
   memcpy(ecp->data + (sizeof(address_t) << 1), value, 32);
-
   build_outgoing_packet(sizeof(ECP) + ecp->length);
 }
 
@@ -510,6 +508,7 @@ void icm_call(uint8_t func) {
     if (icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address)) {
 #ifdef ICM_DEBUG
       icm_debug("code found locally", 18);
+      icm_debug(&icm_config->found_deployed_code->length, 4);
 #endif
       // found locally
       icm_config->ext_code_size = icm_config->found_deployed_code->length;
@@ -972,7 +971,8 @@ uint8_t icm_decrypt() {
       if (icm_config->contract_address_waiting_for_size &&
         memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
         icm_config->contract_address_waiting_for_size = NULL;
-        icm_config->ext_code_size = req->length;
+        if (icm_config->found_deployed_code == NULL)
+          icm_config->ext_code_size = req->length;
         memcpy(icm_config->contract_balance_after_transfer, req->data + 20, 32);
         icm_step();
       }  
@@ -1375,6 +1375,8 @@ uint8_t icm_encrypt(uint32_t length) {
             // potential buffer overflow attack ?
             if (req->dest_offset >= target_page_length) {
 #ifdef ICM_DEBUG
+              icm_debug("target page length", 18);
+              icm_debug(&target_page_length, 4);
               icm_debug("overflow", 8);
 #endif             
               memset(icm_raw_data_base, 0, PAGE_SIZE);
