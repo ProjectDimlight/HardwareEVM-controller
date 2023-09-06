@@ -454,13 +454,15 @@ uint8_t evm_has_output() {
   return evm_active && p->opcode != NONE;
 }
 
+uint8_t wait_for_query = 0;
+
 void handle_ecp(ECP *in) {
   ECP header;
   memcpy_b(&header, in, 16);
   ECP *req = &header;
   in->opcode = 0;
   
-  uint8_t ready = 0, wait_for_query = 0;
+  uint8_t ready = 0;
   
   check_debug_buffer();
 
