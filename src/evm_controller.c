@@ -78,6 +78,7 @@ const uint32_t num_of_call_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
 const uint32_t num_of_end_params[]  = {0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1};
 
 int evm_active = 0;
+uint32_t env_reg_buffer[8];
 
 typedef struct {
   // memcpy_progress
@@ -130,6 +131,22 @@ void dma_write_stack(uint32_t itemNum, void* srcAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
+  *(uint32_t*)dma_config_addr = 0x3;
+  dma_wait();
+}
+
+void dma_read_env(void* env_addr) {
+  *(uint32_t*)dma_srcAddr_addr = (uint32_t)env_addr;
+  *(uint32_t*)dma_destAddr_addr = (uint32_t)&env_reg_buffer;
+  *(uint32_t*)dma_length_addr = 1 << 5;
+  *(uint32_t*)dma_config_addr = 0x1;
+  dma_wait();
+}
+
+void dma_write_env(void* env_addr) {
+  *(uint32_t*)dma_srcAddr_addr = (uint32_t)&env_reg_buffer;
+  *(uint32_t*)dma_destAddr_addr = (uint32_t)env_addr;
+  *(uint32_t*)dma_length_addr = 1 << 5;
   *(uint32_t*)dma_config_addr = 0x3;
   dma_wait();
 }
@@ -272,8 +289,15 @@ void evm_dump_memory() {
 
 void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
   void *addr_dest = data_source_to_address(dest, dest_offset);
-  memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
-
+  if (dest == ENV) {
+    *(uint32_t*)dma_srcAddr_addr = (uint32_t)icm_raw_data_base;
+    *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_env_addr;
+    *(uint32_t*)dma_length_addr = PAGE_SIZE;
+    *(uint32_t*)dma_config_addr = 0x3;
+    dma_wait();
+  } else {
+    memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
+  }
   if (dest != ENV) {
     // update page table
     uint32_t *pte = data_source_to_pte(dest, dest_offset);

@@ -54,6 +54,7 @@ uint32_t icm_hash(address_t address, uint256_t key) {
   uint32_t ad = *(uint32_t*)(address + 0);
   uint32_t hi = *(uint32_t*)(key + 28);
   uint32_t lo = *(uint32_t*)(key + 0);
+  // TODO: mod is so slow here
   uint32_t hash = (ad % storage_prime);
   hash = (hash * 31 + hi) % storage_prime;
   hash = (hash * 17 + lo) % storage_prime;
@@ -163,9 +164,10 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     icm_debug("isroot", 6);
 #endif
   } else {
-    memcpy_b(&(call_frame->pc), evm_env_pc, 4);
-    memcpy_b(&(call_frame->msize), evm_env_msize, 4);
-    memcpy_b(&(call_frame->gas), evm_env_gas, 8);
+    dma_read_env(evm_env_pc), call_frame->pc = env_reg_buffer[0];
+    dma_read_env(evm_env_msize), call_frame->msize = env_reg_buffer[0];
+    dma_read_env(evm_env_msize), call_frame->msize = env_reg_buffer[0];
+    dma_read_env(evm_env_gas), call_frame->gas = ((uint64_t)env_reg_buffer[1] << 32) | env_reg_buffer[0];
     call_frame->pc ++;  // step to the next inst
 
     // does not update stack size, because it has been cleared while dumping out stack elements
@@ -229,18 +231,18 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
 
   if (!init) {
     // Set ENV
-    memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
-    memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
-    memcpy_b(evm_env_msize,             &(call_frame->msize), 4);
-    memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
-    memcpy_b(evm_env_gas,               &(call_frame->gas), 8);
-    memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
-    memcpy_b(evm_env_value,               call_frame->value, sizeof(uint256_t));
+    memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+    env_reg_buffer[0] = call_frame->code_length, dma_write_env(evm_env_code_size);
+    env_reg_buffer[0] = call_frame->input_length, dma_write_env(evm_env_calldata_size);
+    env_reg_buffer[0] = call_frame->msize, dma_write_env(evm_env_msize);
+    env_reg_buffer[0] = call_frame->pc, dma_write_env(evm_env_pc);
+    env_reg_buffer[0] = call_frame->return_length, dma_write_env(evm_env_returndata_size);
+    env_reg_buffer[0] = call_frame->gas & 0xffffffff, env_reg_buffer[1] = call_frame->gas >> 32, dma_write_env(evm_env_gas);
+    memcpy_b(env_reg_buffer, call_frame->storage_address, sizeof(address_t)), dma_write_env(evm_env_address);
+    memcpy_b(env_reg_buffer, call_frame->caller_address, sizeof(address_t)), dma_write_env(evm_env_caller);
+    memcpy_b(env_reg_buffer, call_frame->value, sizeof(uint256_t)), dma_write_env(evm_env_value);
     if (balance)
-      memcpy_b(evm_env_balance,             balance, sizeof(uint256_t));
-    
-    memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
-    memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
+      memcpy_b(env_reg_buffer, balance, sizeof(uint256_t)), dma_write_env(evm_env_balance);
 
 #ifdef ICM_DEBUG
     icm_debug("set env regs", 12);
@@ -260,17 +262,17 @@ void icm_stack_pop() {
     memcpy(icm_ram_memory_sign_tmp, call_frame->memory_sign, call_frame->top - call_frame->memory_sign);
 
     // Recover ENV
-    memcpy_b(evm_env_code_size,         &(call_frame->code_length), 4);
-    memcpy_b(evm_env_calldata_size,     &(call_frame->input_length), 4);
+    memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+    env_reg_buffer[0] = call_frame->code_length, dma_write_env(evm_env_code_size);
+    env_reg_buffer[0] = call_frame->input_length, dma_write_env(evm_env_calldata_size);
     // memcpy_b(evm_env_stack_size,        &(call_frame->stack_size), 4);
-    memcpy_b(evm_env_msize,             &(call_frame->msize), 4);
-    memcpy_b(evm_env_pc,                &(call_frame->pc), 4);
-    memcpy_b(evm_env_gas,               &(call_frame->gas), 8);
-    memcpy_b(evm_env_returndata_size,   &(call_frame->return_length), 4);
-    memcpy_b(evm_env_value,               call_frame->value, sizeof(uint256_t));
-    
-    memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
-    memcpy_b(evm_env_caller,  call_frame->caller_address, sizeof(address_t));
+    env_reg_buffer[0] = call_frame->msize, dma_write_env(evm_env_msize);
+    env_reg_buffer[0] = call_frame->pc, dma_write_env(evm_env_pc);
+    env_reg_buffer[0] = call_frame->return_length, dma_write_env(evm_env_returndata_size);
+    env_reg_buffer[0] = call_frame->gas & 0xffffffff, env_reg_buffer[1] = call_frame->gas >> 32, dma_write_env(evm_env_gas);
+    memcpy_b(env_reg_buffer, call_frame->storage_address, sizeof(address_t)), dma_write_env(evm_env_address);
+    memcpy_b(env_reg_buffer, call_frame->caller_address, sizeof(address_t)), dma_write_env(evm_env_caller);
+    memcpy_b(env_reg_buffer, call_frame->value, sizeof(uint256_t)), dma_write_env(evm_env_value);
   }
 
 #ifdef ICM_DEBUG
@@ -653,7 +655,8 @@ void icm_call_end_state_machine() {
       icm_config->immutable_page_sign = base + page_length(input_length);
       icm_config->immutable_page_length = input_length;
 
-      memcpy_b(&(call_frame->pc), evm_env_pc, 4);
+      memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+      env_reg_buffer[0] = call_frame->pc, dma_write_env(evm_env_pc);
       call_frame->pc++;
 
       cesm_state = CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY;
@@ -732,7 +735,8 @@ void icm_call_end_state_machine() {
     }
 
     call_frame->return_length = icm_config->immutable_page_length;
-    memcpy_b(evm_env_returndata_size, &(call_frame->return_length), 4);
+    memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+    env_reg_buffer[0] = call_frame->return_length, dma_write_env(evm_env_returndata_size);
 
     // Resume
     cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
@@ -768,7 +772,8 @@ void icm_call_end_state_machine() {
       uint256_t code_hash;
       icm_code_hash(code_hash, call_frame->code, call_frame->code_length);
       icm_get_address_for_create2(call_frame->address, code_hash, sender_address, salt);
-      memcpy_b(evm_env_address, call_frame->storage_address, sizeof(address_t));
+      memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+      memcpy_b(env_reg_buffer, call_frame->storage_address, sizeof(address_t)), dma_write_env(evm_env_address);
 
       // transfer call value
       icm_switch_contract(
@@ -917,7 +922,8 @@ void icm_call_end_state_machine() {
     evm_load_stack(1);
 
     if (icm_config->calling_precompiled) {
-      memcpy_b(evm_env_pc, &(call_frame->pc), 4);
+      memset_b(env_reg_buffer, 0, sizeof(env_reg_buffer));
+      env_reg_buffer[0] = call_frame->pc, dma_write_env(evm_env_pc);
       icm_config->calling_precompiled = 0;
     }
 
@@ -1001,8 +1007,8 @@ uint8_t icm_decrypt() {
 
     // check passed
     call_frame = icm_config->call_stack;
-
-    memcpy_b(call_frame->address, evm_env_caller, sizeof(address_t));
+    dma_read_env(evm_env_caller), memcpy_b(call_frame->address, env_reg_buffer, sizeof(address_t));
+    
     call_frame->storage_address = call_frame->address;
     call_frame->caller_address = icm_config->zero;
     call_frame->call_end_func = req->func;
@@ -1016,16 +1022,16 @@ uint8_t icm_decrypt() {
     uint64_t gas;
     uint256_t value;
 
-    memcpy_b(address, evm_env_address, sizeof(address_t));
+    dma_read_env(evm_env_address), memcpy_b(address, env_reg_buffer, sizeof(address_t));
     icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address);
     if (icm_config->found_deployed_code) {
       code_length = icm_config->found_deployed_code->length;
     } else {
       memcpy_b(&code_length, evm_env_code_size, 4);
     }
-    memcpy_b(&input_length, evm_env_calldata_size, 4);
-    memcpy_b(&gas, evm_env_gas, 8);
-    memcpy_b(value, evm_env_value, sizeof(uint256_t));
+    dma_read_env(evm_env_calldata_size), memcpy_b(&input_length, env_reg_buffer, 4);
+    dma_read_env(evm_env_gas), memcpy_b(&gas, env_reg_buffer, 8);
+    dma_read_env(evm_env_value), memcpy_b(value, env_reg_buffer, sizeof(uint256_t));
 
 #ifdef ICM_DEBUG
     icm_debug(address, 20);

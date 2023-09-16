@@ -100,6 +100,7 @@ typedef struct {
 #define ECP_OFFSET(p) ((ECP*)(p))
 
 extern int evm_active;
+extern uint32_t env_reg_buffer[8];
 
 void evm_memory_copy(ECP *req);
 void handle_ecp(ECP *buf);
@@ -108,5 +109,8 @@ void check_debug_buffer();
 
 void *memcpy_b(void *dst0, void *src0, uint32_t len0);
 void *memset_b(void *dst0, uint8_t val, uint32_t len0);
+
+void dma_read_env(void* env_addr);
+void dma_write_env(void* env_addr);
 
 #endif
