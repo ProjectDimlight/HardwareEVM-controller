@@ -186,8 +186,11 @@ void evm_load_storage() {
 
       
     if (numItem == 1) {
-      uint8_t tmp[64];
-      memcpy_b(tmp, slot, 64);
+      uint32_t tmp[16];
+      // memcpy_b(tmp, slot, 64);
+      for (int i = 0; i < 16; i++) {
+        tmp[i] = slot[i];
+      }
       icm_debug(tmp, 64);
     }
   }
@@ -262,11 +265,16 @@ void evm_dump_memory() {
 void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
   void *addr_dest = data_source_to_address(dest, dest_offset);
   memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
+  
+  uint8_t res[PAGE_SIZE];
+  memcpy_b(res, addr_dest, PAGE_SIZE);
+  icm_debug(res, PAGE_SIZE);
 
   if (dest != ENV) {
     // update page table
     uint32_t *pte = data_source_to_pte(dest, dest_offset);
     *pte = (dest_offset & page_tagid_mask) | 0x2;
+    // icm_debug(&pte, 4);
   }
 }
 
@@ -559,7 +567,6 @@ void handle_ecp(ECP *in) {
     else { // swap memory
 #ifdef ICM_DEBUG
       icm_debug("swap page", 9);
-      icm_debug(req, 16);
 #endif
       if (req->func) { // has dirty page to send back
         memcpy_b(icm_raw_data_base, data_source_to_address(req->src, req->src_offset), req->length);
@@ -573,6 +580,7 @@ void handle_ecp(ECP *in) {
 #endif
       ready = icm_encrypt(sizeof(ECP) + content_length);
       if (ready) {
+        // icm_debug("found locally, load to FPGA", 27);
         evm_load_memlike(req->src, req->dest_offset);
       }
     }
@@ -631,6 +639,10 @@ void handle_ecp(ECP *in) {
 #ifdef ICM_DEBUG
     icm_debug("dump stack", 10);
 #endif
+
+    uint8_t res[PAGE_SIZE];
+    memcpy_b(res, evm_code_addr + 0xc00, PAGE_SIZE);
+    icm_debug(res, PAGE_SIZE);
 
     // end
     content_length = 0;
@@ -749,10 +761,11 @@ void handle_ecp(ECP *in) {
     // does not continue if exception from evm not yet handled
     if (evm_has_output())
       return;
-   *(char*)(evm_cin_addr + 4) = evm_active;
+    *(char*)(evm_cin_addr + 4) = evm_active;
 #ifdef ICM_DEBUG
   icm_debug("cont", 4);
 #endif
+    icm_debug("cont", 4);
   }
 }
 

@@ -69,6 +69,7 @@ typedef struct __OCMStackFrame{
 } OCMStackFrame;
 
 typedef struct {
+  uint8_t buffer[PAGE_SIZE];
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
   uint32_t ocm_mem_pte, ocm_immutable_pte;

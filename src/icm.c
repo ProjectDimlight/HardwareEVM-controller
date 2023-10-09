@@ -94,7 +94,7 @@ void icm_dump_storage() {
   uint64_t count = 0, content_length = 4;
   for (uint64_t i = 0; i < storage_prime; i++)
   if (icm_temp_storage->valid[i]) {
-    memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), 84);
+    memcpy((res->data) + content_length, &(icm_temp_storage->record[i]), 84);
     count++; content_length += 84;
     icm_temp_storage->valid[i] = 0;
   }
@@ -1084,27 +1084,28 @@ uint8_t icm_decrypt() {
 #ifdef ICM_DEBUG
     icm_debug("recv code", 9);
 #endif
+        icm_debug("recv code", 9);
+        icm_debug(&req->dest_offset, 4);
         aes_decrypt(icm_raw_data_base, req->data, req->length);
         if (req->length < PAGE_SIZE) {
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-          aes_encrypt(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
-          // the data are encrypted so we have to decrypt again
-          aes_decrypt(icm_raw_data_base, req->data, req->length);
-          memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
+          memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
+          aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
         }
+        icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 #ifdef ICM_DEBUG
     icm_debug("recv input", 10);
 #endif
+        icm_debug("recv input", 10);
+        icm_debug(&req->dest_offset, 4);
         aes_decrypt(icm_raw_data_base, req->data, req->length);
         if (req->length < PAGE_SIZE) {
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-          aes_encrypt(call_frame->input + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
-          // the data are encrypted so we have to decrypt again
-          aes_decrypt(icm_raw_data_base, req->data, req->length);
-          memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
+          memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
+          aes_encrypt(call_frame->input + req->dest_offset, icm_config->buffer, PAGE_SIZE);
         }
       } else if (req->dest == STACK) {
 #ifdef ICM_DEBUG
@@ -1218,7 +1219,11 @@ uint8_t icm_encrypt(uint32_t length) {
         if (num_of_items) {
           uint32_t id = icm_find(base);
           if (id == storage_prime) {
+            uint8_t head[16];
+            memcpy(head, get_output_buffer(), 16);
             icm_dump_storage();
+            memcpy(get_output_buffer(), head, 16);
+
             id = icm_find(base);
           }
 
@@ -1256,8 +1261,8 @@ uint8_t icm_encrypt(uint32_t length) {
         content_length = 8 + 32;
 
         // [TODO] send dummy requests
-
         memcpy(req->data + 8, base + 4, 32);
+        set_retry_send();
         build_outgoing_packet(sizeof(ECP) + content_length);
         return 0;
       }
@@ -1375,7 +1380,7 @@ uint8_t icm_encrypt(uint32_t length) {
             // potential buffer overflow attack ?
             if (req->dest_offset >= target_page_length) {
 #ifdef ICM_DEBUG
-              icm_debug("target page length", 18);
+              icm_debug(&(req->dest_offset), 4);
               icm_debug(&target_page_length, 4);
               icm_debug("overflow", 8);
 #endif             
@@ -1383,9 +1388,9 @@ uint8_t icm_encrypt(uint32_t length) {
             } else if (target_page_sign[sign_offset(req->dest_offset) + 63]) { // valid
 #ifdef ICM_DEBUG
               icm_debug("received", 8);
+              icm_debug(icm_raw_data_base, PAGE_SIZE);
 #endif
               aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
-              icm_debug(icm_raw_data_base, PAGE_SIZE);
             } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
 #ifdef ICM_DEBUGD
 #endif             
@@ -1400,7 +1405,10 @@ uint8_t icm_encrypt(uint32_t length) {
               return 0;
             }
           } else {
+            // memory
+            icm_debug("memory", 6);
             if (req->dest_offset >= target_page_length) {
+              icm_debug("overflow", 8);
               memset(icm_raw_data_base, 0, PAGE_SIZE);
             } else {
               aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);

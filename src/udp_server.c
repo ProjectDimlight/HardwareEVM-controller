@@ -61,6 +61,9 @@ uint8_t retry_if_no_reply = 0;
 uint32_t retry_packet_length = 0;
 uint32_t retry_counter = 0;
 
+uint8_t expected_dest;
+uint32_t expected_dest_offset;
+
 void set_retry_send() {
 	retry_if_no_reply = 1;
 }
@@ -87,13 +90,30 @@ uint8_t *check_incoming_packet() {
 	// now the packet is in the input buffer, but encrypted
 	// decrypt the payloads to secure memory
 	// and set input_valid only after the signature is checked
-	return input_valid && icm_decrypt() ? (input_valid = 0, buf_in) : (input_valid = 0, NULL);
+
+	if (input_valid) {
+		input_valid = 0;
+		if (retry_if_no_reply) {
+			if (((ECP*)buf_in)->dest != expected_dest)
+				return NULL;
+			if (((ECP*)buf_in)->dest_offset != expected_dest_offset)
+				return NULL;
+			// ack
+			retry_if_no_reply = 0;
+		}
+		return icm_decrypt() ? buf_in : NULL;
+	}
 }
 
 extern int fail;
 extern uint8_t *led_ptr;
 
 void build_outgoing_packet(uint32_t len) {
+	if (retry_if_no_reply) {
+		expected_dest = ((ECP*)buf_out)->src;
+		expected_dest_offset = ((ECP*)buf_out)->dest_offset;
+	}
+
 	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
 	struct pbuf *obuf = NULL;
 	obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_POOL);
@@ -127,13 +147,11 @@ void build_outgoing_packet(uint32_t len) {
 	pbuf_free(obuf);
 
 	retry_packet_length = len;
-	retry_counter = 100000;
+	retry_counter = 400000;
 }
 
 static void build_incoming_packet(struct pbuf *p) {
 	// received
-	retry_if_no_reply = 0;
-
 	input_valid = 1;
 	input_size = p->tot_len;
 	pbuf_copy_partial(p, buf_in, input_size, 0);
