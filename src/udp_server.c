@@ -33,6 +33,12 @@
 #include "platform_config.h"
 #include "netif/xadapter.h"
 
+typedef struct {
+	uint8_t enable_reliable;
+	uint8_t reserved;
+	uint16_t packet_id;
+} ECPHeader;
+
 extern struct netif server_netif;
 static struct udp_pcb *pcb;
 
@@ -57,29 +63,38 @@ void trigger_input() {
 	xemacif_input(&server_netif);
 }
 
-uint8_t retry_if_no_reply = 0;
-uint32_t retry_packet_length = 0;
 uint32_t retry_counter = 0;
+uint16_t expected_reply_id = 0;
+uint16_t request_id = 0;
 
-uint8_t expected_dest;
-uint32_t expected_dest_offset;
+struct pbuf *queue[64];
 
-void set_retry_send() {
-	retry_if_no_reply = 1;
+void reset_udp() {
+	retry_counter = 0;
+
+	for (uint32_t i = expected_reply_id; i != request_id; i++) {
+		pbuf_free(queue[i & 0x3f]);
+	}
+	expected_reply_id = 0;
+	request_id = 0;
 }
 
 void retry_send() {
+	if (expected_reply_id != request_id) {  // there exists packets to send
 #ifdef ICM_DEBUG
 	icm_debug("retry send", 10);
 #endif
-	build_outgoing_packet(retry_packet_length);
+		struct pbuf *p = queue[expected_reply_id & 0x3f]; // 256
+		queue[expected_reply_id & 0x3f] = pbuf_clone(PBUF_TRANSPORT, PBUF_POOL, p);
+		udp_sendto(tpcb, p, &taddr, tport);
+		pbuf_free(p);
+	}
 }
 
 void retry_timer() {
-	if (!retry_if_no_reply) return;
-
 	if (retry_counter == 0) {
 		retry_send();
+		retry_counter = 200000;
 	} else {
 		retry_counter--;
 	}
@@ -93,15 +108,19 @@ uint8_t *check_incoming_packet() {
 
 	if (input_valid) {
 		input_valid = 0;
-		if (retry_if_no_reply) {
-			if (((ECP*)buf_in)->dest != expected_dest)
+
+		ECPHeader *p = buf_in;
+		if (p->enable_reliable == 1) {
+			if (p->packet_id != expected_reply_id)
 				return NULL;
-			if (((ECP*)buf_in)->dest_offset != expected_dest_offset)
-				return NULL;
+
 			// ack
-			retry_if_no_reply = 0;
+			pbuf_free(queue[expected_reply_id & 0x3f]);
+			expected_reply_id++;
+			retry_counter = 0;
 		}
-		return icm_decrypt() ? buf_in : NULL;
+
+		return icm_decrypt() ? buf_in + 4 : NULL;
 	}
 }
 
@@ -109,45 +128,32 @@ extern int fail;
 extern uint8_t *led_ptr;
 
 void build_outgoing_packet(uint32_t len) {
-	if (retry_if_no_reply) {
-		expected_dest = ((ECP*)buf_out)->src;
-		expected_dest_offset = ((ECP*)buf_out)->dest_offset;
-	}
-
 	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
 	struct pbuf *obuf = NULL;
-	obuf = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_POOL);
+	obuf = pbuf_alloc(PBUF_TRANSPORT, 4 + len, PBUF_POOL);
+	
+	uint8_t enable_reliable = 1, zero = 0;
 
-	if (obuf == NULL) {
-		while (1) {	
-			fail = 1;
-			*led_ptr = 0x1;
+	ECP *p = buf_out;
+	if (p->opcode == 100 || p->opcode == DEBUG)
+		enable_reliable = 0;
+
+	pbuf_take_at(obuf, &enable_reliable, 1, 0);
+	pbuf_take_at(obuf, &zero, 1, 1);
+	pbuf_take_at(obuf, &request_id, 2, 2);
+	pbuf_take_at(obuf, buf_out, len, 4);
+
+	if (enable_reliable) {
+		queue[request_id & 0x3f] = pbuf_clone(PBUF_TRANSPORT, PBUF_POOL, obuf);
+		if (request_id == expected_reply_id) { // empty queue
+			udp_sendto(tpcb, obuf, &taddr, tport);
+			pbuf_free(obuf);
 		}
-		return;
+		request_id ++;
+	} else {
+		udp_sendto(tpcb, obuf, &taddr, tport);
+		pbuf_free(obuf);
 	}
-
-	err_t err = pbuf_take(obuf, buf_out, len);
-	if (err != ERR_OK) {
-		while (1) {	
-			fail = 1;
-			*led_ptr = 0x2;
-		}
-		return;
-	}
-
-	err = udp_sendto(tpcb, obuf, &taddr, tport);
-	if (err != ERR_OK) {
-		while (1) {	
-			fail = 1;
-			*led_ptr = 0x3;
-		}
-		return;
-	}
-
-	pbuf_free(obuf);
-
-	retry_packet_length = len;
-	retry_counter = 400000;
 }
 
 static void build_incoming_packet(struct pbuf *p) {

@@ -7,28 +7,30 @@
 #define PAGE_SIZE 1024
 #define NUMBER_OF_PAGES 4
 
-extern void* const evm_base_addr 		  ;
-extern void* const evm_cin_addr  		  ;
-extern void* const evm_cout_addr 		  ;
-extern void* const evm_code_addr     	;
-extern void* const evm_calldata_addr 	;
-extern void* const evm_mem_addr 		  ;
-extern void* const evm_storage_addr   ;
-extern void* const evm_env_addr 		  ;
-extern void* const evm_stack_addr     ;
+extern volatile void* const evm_base_addr 		  ;
+extern volatile void* const evm_cin_addr  		  ;
+extern volatile void* const evm_cout_addr 		  ;
+extern volatile void* const evm_code_addr     	;
+extern volatile void* const evm_calldata_addr 	;
+extern volatile void* const evm_mem_addr 		    ;
+extern volatile void* const evm_storage_addr    ;
+extern volatile void* const evm_env_addr 		    ;
+extern volatile void* const evm_stack_addr      ;
 
-extern void* const evm_env_stack_size;
-extern void* const evm_env_pc;
-extern void* const evm_env_gas;
-extern void* const evm_env_msize;
-extern void* const evm_env_value;
-extern void* const evm_env_balance;
-extern void* const evm_env_code_size;
-extern void* const evm_env_calldata_size;
-extern void* const evm_env_returndata_size;
-extern void* const evm_env_address;
-extern void* const evm_env_caller;
-extern void* const evm_env_origin;
+extern volatile char* const evm_cin_core_state;
+
+extern volatile void* const evm_env_stack_size;
+extern volatile void* const evm_env_pc;
+extern volatile void* const evm_env_gas;
+extern volatile void* const evm_env_msize;
+extern volatile void* const evm_env_value;
+extern volatile void* const evm_env_balance;
+extern volatile void* const evm_env_code_size;
+extern volatile void* const evm_env_calldata_size;
+extern volatile void* const evm_env_returndata_size;
+extern volatile void* const evm_env_address;
+extern volatile void* const evm_env_caller;
+extern volatile void* const evm_env_origin;
 
 extern const uint64_t pt_offset 		  ;
 extern const uint64_t page_tag_mask	  ;

@@ -31,29 +31,31 @@ void *memset_b(void *dst0, uint8_t val, uint32_t len0)
 // 0x10050000: environment
 // 0x10060000: stack
 
-extern void * const icm_raw_data_base;
-void* const evm_base_addr 		  = (void*)0x410000000ll;
-void* const evm_cin_addr  		  = (void*)0x410000000ll;
-void* const evm_cout_addr 		  = (void*)0x410008000ll;
-void* const evm_code_addr     	= (void*)0x410010000ll;
-void* const evm_calldata_addr 	= (void*)0x410020000ll;
-void* const evm_mem_addr 		    = (void*)0x410030000ll;
-void* const evm_storage_addr 	  = (void*)0x410040000ll;
-void* const evm_env_addr 		    = (void*)0x410050000ll;
-void* const evm_stack_addr 		  = (void*)0x410060000ll;
+extern void* const icm_raw_data_base;
+volatile void* const evm_base_addr 		  = (void*)0x410000000ll;
+volatile void* const evm_cin_addr  		  = (void*)0x410000000ll;
+volatile void* const evm_cout_addr 		  = (void*)0x410008000ll;
+volatile void* const evm_code_addr     	= (void*)0x410010000ll;
+volatile void* const evm_calldata_addr 	= (void*)0x410020000ll;
+volatile void* const evm_mem_addr 		    = (void*)0x410030000ll;
+volatile void* const evm_storage_addr 	  = (void*)0x410040000ll;
+volatile void* const evm_env_addr 		    = (void*)0x410050000ll;
+volatile void* const evm_stack_addr 		  = (void*)0x410060000ll;
 
-void* const evm_env_stack_size       = evm_env_addr + 0x0e * 32;
-void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
-void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
-void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
-void* const evm_env_value            = evm_env_addr + 0x14 * 32;
-void* const evm_env_balance          = evm_env_addr + 0x07 * 32;
-void* const evm_env_code_size        = evm_env_addr + 0x18 * 32;
-void* const evm_env_calldata_size    = evm_env_addr + 0x16 * 32;
-void* const evm_env_returndata_size  = evm_env_addr + 0x1d * 32;
-void* const evm_env_address          = evm_env_addr + 0x10 * 32;
-void* const evm_env_caller           = evm_env_addr + 0x13 * 32;
-void* const evm_env_origin           = evm_env_addr + 0x12 * 32;
+volatile char* const evm_cin_core_state  = (char*)0x410000004ll;
+
+volatile void* const evm_env_stack_size       = evm_env_addr + 0x0e * 32;
+volatile void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
+volatile void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
+volatile void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
+volatile void* const evm_env_value            = evm_env_addr + 0x14 * 32;
+volatile void* const evm_env_balance          = evm_env_addr + 0x07 * 32;
+volatile void* const evm_env_code_size        = evm_env_addr + 0x18 * 32;
+volatile void* const evm_env_calldata_size    = evm_env_addr + 0x16 * 32;
+volatile void* const evm_env_returndata_size  = evm_env_addr + 0x1d * 32;
+volatile void* const evm_env_address          = evm_env_addr + 0x10 * 32;
+volatile void* const evm_env_caller           = evm_env_addr + 0x13 * 32;
+volatile void* const evm_env_origin           = evm_env_addr + 0x12 * 32;
 
 const uint64_t pt_offset 		    = 0x8000;
 const uint64_t page_tag_mask	  = ~0xfff;
@@ -155,11 +157,15 @@ void evm_load_stack(uint8_t func) {
 
 ///////////////////////////////////////////////////////////////////
 
+uint64_t bug_fixer;
+
 uint32_t evm_store_storage() {
   uint32_t numItem = 0, offset = 1;
   uint32_t* data = (uint32_t*)icm_raw_data_base;
-  uint32_t* slot = (uint32_t*)evm_storage_addr;
-  for (uint32_t index = 0; index < 64; index++, slot += 16)
+  volatile uint32_t* slot = (uint32_t*)evm_storage_addr;
+  for (uint32_t index = 0; index < 64; index++, slot += 16) {
+    memcpy(bug_fixer, slot, 8);
+
     // copy out if valid and dirty
     if ((slot[0] & 0x1) == 0x1) {
       data[offset] = (slot[0] & 0xffffffc0) + index;
@@ -167,6 +173,7 @@ uint32_t evm_store_storage() {
         data[offset + i] = slot[i];
       numItem++, offset += 16;
     }
+  }
   data[0] = numItem;
 
   return 64 * numItem + 4;
@@ -179,12 +186,13 @@ void evm_load_storage() {
 
   for (int i = 0; i < numItem; i++, offset += 16) {
     uint32_t index = data[offset] & 0x3f;
-    uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
+    volatile uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
+    // memcpy(bug_fixer, slot, 8);
     slot[0] = (data[offset] & 0xffffffc0) + 0x1;
     for (int j = 1; j < 16; j++)
       slot[j] = data[offset + j];
 
-      
+#ifdef ICM_DEBUG
     if (numItem == 1) {
       uint32_t tmp[16];
       // memcpy_b(tmp, slot, 64);
@@ -193,12 +201,14 @@ void evm_load_storage() {
       }
       icm_debug(tmp, 64);
     }
+#endif
   }
 }
 
-uint32_t evm_swap_storage(uint32_t *slot) {
+uint32_t evm_swap_storage(volatile uint32_t *slot) {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
   uint32_t slot_id = (((void*)slot) - evm_storage_addr) >> 6;
+  memcpy(bug_fixer, slot, 8);
 
   // commit dirty item
   uint32_t offset = 1;
@@ -231,7 +241,7 @@ uint32_t evm_swap_storage(uint32_t *slot) {
 
 void evm_clear_storage() {
   // clear storage
-  uint32_t* slot = (uint32_t*)evm_storage_addr;
+  volatile uint32_t* slot = (uint32_t*)evm_storage_addr;
   for (uint32_t index = 0; index < 64; index++, slot += 16)
     slot[0] = 0;
 }
@@ -265,16 +275,27 @@ void evm_dump_memory() {
 void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
   void *addr_dest = data_source_to_address(dest, dest_offset);
   memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
+  memcpy_b(bug_fixer, addr_dest, 8);
   
-  uint8_t res[PAGE_SIZE];
-  memcpy_b(res, addr_dest, PAGE_SIZE);
-  icm_debug(res, PAGE_SIZE);
+#ifdef ICM_DEBUG
+  {
+    uint8_t res[PAGE_SIZE];
+    icm_debug("load memlike", 12);
+    memcpy(res, "dest", 4);
+    *(uint32_t*)(res + 4) = 0;
+    memcpy(res + 4, &dest, 1);
+    memcpy(res + 8, "ofst", 4);
+    memcpy(res + 12, &dest_offset, 4);
+    icm_debug(res, 16);
+    memcpy_b(res, addr_dest, PAGE_SIZE);
+    icm_debug(res, PAGE_SIZE);
+  }
+#endif
 
   if (dest != ENV) {
     // update page table
     uint32_t *pte = data_source_to_pte(dest, dest_offset);
     *pte = (dest_offset & page_tagid_mask) | 0x2;
-    // icm_debug(&pte, 4);
   }
 }
 
@@ -331,7 +352,6 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
 
 void evm_memory_copy(ECP *req) {
   if (req) {
-    // icm_debug("memcopy", 7);
     pending_evm_memory_copy_request.ecp = *req;
     if (req->src == RETURNDATA) {
       pending_evm_memory_copy_request.ecp.src = OCM_IMMUTABLE_MEM;
@@ -346,6 +366,7 @@ void evm_memory_copy(ECP *req) {
   uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
+/*
 #ifdef ICM_DEBUG
     uint8_t tmp[32] = {0};
     memcpy_b(tmp     , "step", 4);
@@ -354,6 +375,7 @@ void evm_memory_copy(ECP *req) {
     memcpy_b(tmp + 24, &(req->length), 4);
     icm_debug(tmp, 32);
 #endif
+*/
     
     // before page
     addr_src = data_source_to_address(req->src, req->src_offset);
@@ -391,7 +413,7 @@ void evm_memory_copy(ECP *req) {
     
     // copy
 #ifdef ICM_DEBUG
-    icm_debug("memcopy", 7);
+    // icm_debug("memcopy", 7);
 #endif
     
     memcpy_b(addr_dest, addr_src, step_length);
@@ -416,7 +438,6 @@ void evm_memory_copy(ECP *req) {
   }
 
   // finalize
-  // icm_debug("memcopy fin", 11);
   if (req->dest == OCM_MEM || req->dest == OCM_IMMUTABLE_MEM) {
     pte_dest = data_source_to_pte(req->dest, 0);
     sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
@@ -435,15 +456,21 @@ void check_debug_buffer() {
   uint32_t *debug_buffer_base = (uint32_t*)0xa0000000;
   uint32_t *data = get_output_buffer() + sizeof(ECP);
   uint16_t target = *debug_counter;
+  uint32_t offset = 0;
 
   for (; local_debug_counter != target; local_debug_counter++) {
     // gas8, pc4, stacksize4, gap16, res32
-    for (int i = 0; i < 16; i++)
-      data[i] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
-
-    memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
-    icm_encrypt(sizeof(ECP) + 64);
+    for (int i = 0; i < 16; i++, offset++)
+      data[offset] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
   }
+
+  if (offset == 0)
+    return;
+
+  // send multiple debug data at a time
+  memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+  ((ECP*)get_output_buffer())->length = (offset << 2);
+  icm_encrypt(sizeof(ECP) + (offset << 2));
 }
 
 void clear_debug_buffer() {
@@ -471,7 +498,6 @@ void handle_ecp(ECP *in) {
 #ifdef ICM_DEBUG
   icm_debug(req, 16);
 #endif
-  icm_debug(req, 16);
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -592,7 +618,6 @@ void handle_ecp(ECP *in) {
   else if (req->opcode == END) {
     // before actually ending the run
     // print all traces
-    check_debug_buffer();
     evm_active = 0;
 
 #ifdef ICM_DEBUG
@@ -640,10 +665,6 @@ void handle_ecp(ECP *in) {
     icm_debug("dump stack", 10);
 #endif
 
-    uint8_t res[PAGE_SIZE];
-    memcpy_b(res, evm_code_addr + 0xc00, PAGE_SIZE);
-    icm_debug(res, PAGE_SIZE);
-
     // end
     content_length = 0;
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
@@ -652,7 +673,6 @@ void handle_ecp(ECP *in) {
   else if (req->opcode == CALL) {
     // before actually ending the run
     // print all traces
-    check_debug_buffer();
     evm_active = 0;
 
 #ifdef ICM_DEBUG
@@ -751,7 +771,7 @@ void handle_ecp(ECP *in) {
   }
   else if (req->opcode == DEBUG) {
 #ifdef ICM_DEBUG
-  icm_debug("debug triggered", 15);
+    icm_debug("debug triggered", 15);
 #endif
     ready = 1;
   }
@@ -759,13 +779,16 @@ void handle_ecp(ECP *in) {
   // resume execution                  | only when the evm_memory_copy is finished  
   if ((req->dest != HOST && !wait_for_query && !pending_evm_memory_copy_request.valid) || ready) {
     // does not continue if exception from evm not yet handled
-    if (evm_has_output())
-      return;
-    *(char*)(evm_cin_addr + 4) = evm_active;
+    if (evm_has_output()) {
 #ifdef ICM_DEBUG
-  icm_debug("cont", 4);
+      icm_debug("ecp pending", 11);
 #endif
+      return;
+    }
+    *evm_cin_core_state = evm_active;
+#ifdef ICM_DEBUG
     icm_debug("cont", 4);
+#endif
   }
 }
 

@@ -20,6 +20,7 @@ enum ICMFunc{
   ICM_CLEAR_STORAGE = 1,
   ICM_SET_USER_PUB, 
   ICM_SET_CONTRACT,
+  ICM_ACK
 };
 
 enum CESMStates{
@@ -169,3 +170,5 @@ uint8_t icm_decrypt();
 // the length should be the entire length (with the ECP header)
 // returns 1 if icm solves the request and can resume, 0 if the request is passed to HOST
 uint8_t icm_encrypt(uint32_t length);
+
+void reset_udp();

@@ -957,8 +957,8 @@ void icm_call_end_state_machine() {
 }
 
 uint8_t icm_decrypt() {
-  ECP *req = get_input_buffer();
-  
+  ECP *req = get_input_buffer() + 4;
+
   if (req->opcode == ICM) {
 #ifdef ICM_DEBUG
     icm_debug("icm", 3);
@@ -1038,6 +1038,8 @@ uint8_t icm_decrypt() {
     return 1;
   } else if (req->opcode == END) {
     // External force quit
+    reset_udp();
+    
     return 1;
   } else {
     if (req->src == STORAGE) { // this request is sent from host
@@ -1082,25 +1084,32 @@ uint8_t icm_decrypt() {
         memcpy(call_frame->code + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->code_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 #ifdef ICM_DEBUG
-    icm_debug("recv code", 9);
+        {
+          icm_debug("recv code", 9);
+          // show current depth and address
+          uint8_t tmp[1024];
+          *(uint32_t*)tmp = (call_frame - icm_config->call_stack);
+          memcpy(tmp + 4, call_frame->address, 20);
+          icm_debug(tmp, 24);
+          // show base offset
+          icm_debug(&req->dest_offset, 4);
+        }
 #endif
-        icm_debug("recv code", 9);
-        icm_debug(&req->dest_offset, 4);
+
         aes_decrypt(icm_raw_data_base, req->data, req->length);
         if (req->length < PAGE_SIZE) {
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
           memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
           aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
         }
-        icm_debug(icm_raw_data_base, PAGE_SIZE);
+        // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 #ifdef ICM_DEBUG
-    icm_debug("recv input", 10);
-#endif
         icm_debug("recv input", 10);
-        icm_debug(&req->dest_offset, 4);
+        icm_debug(&req->dest_offset, 4);  
+#endif
         aes_decrypt(icm_raw_data_base, req->data, req->length);
         if (req->length < PAGE_SIZE) {
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
@@ -1109,14 +1118,14 @@ uint8_t icm_decrypt() {
         }
       } else if (req->dest == STACK) {
 #ifdef ICM_DEBUG
-    icm_debug("recv stack", 10);
-    icm_debug(req->data + 4, 32);
+        icm_debug("recv stack", 10);
+        icm_debug(req->data + 4, 32);
 #endif
         // [TODO] Length has to be 0 or 1
         memcpy(icm_raw_data_base, req->data, req->length);
       } else if (req->dest == RETURNDATA && cesm_state == CESM_WAIT_FOR_PRECOMPILED_EXECUTION) {
 #ifdef ICM_DEBUG
-    icm_debug("recv precompiled results", 24);
+        icm_debug("recv precompiled results", 24);
 #endif
         if (req->length < PAGE_SIZE) {
           memset(req->data + req->length, 0, PAGE_SIZE - req->length);
@@ -1126,11 +1135,6 @@ uint8_t icm_decrypt() {
           icm_config->immutable_page_length = req->dest_offset + req->length;
         return 0;
       }
-      /*
-      memcpy(get_output_buffer(), "echo", 4);
-      memcpy(get_output_buffer() + 4, icm_raw_data_base, req->length);
-      build_outgoing_packet(4 + req->length);
-      */
       
       return 1;
     }
@@ -1226,6 +1230,14 @@ uint8_t icm_encrypt(uint32_t length) {
 
             id = icm_find(base);
           }
+          
+#ifdef ICM_DEBUG
+          {
+            icm_debug("OCM store", 9);
+            icm_debug(base, 64);
+            icm_debug(call_frame->storage_address, 20);
+          }
+#endif
 
           // OCM need no encryption
           icm_temp_storage->valid[id] = 1;
@@ -1240,12 +1252,21 @@ uint8_t icm_encrypt(uint32_t length) {
         // 0. check in OCM
 
         uint32_t id = icm_find(base + 4);
+        
+#ifdef ICM_DEBUG
+        {
+          icm_debug("OCM key check", 13);
+          icm_debug(base + 4, 32);
+          icm_debug(call_frame->storage_address, 20);
+        }
+#endif
+
         if (id != storage_prime && icm_temp_storage->valid[id]) {
           // found, do not send output request
           memcpy(icm_raw_data_base, base, 4 + 32);
           memcpy(icm_raw_data_base + 4 + 32, icm_temp_storage->record[id].v, 32);
           
-          evm_load_storage();
+          // evm_load_storage();
           return 1;
         }
         
@@ -1262,7 +1283,7 @@ uint8_t icm_encrypt(uint32_t length) {
 
         // [TODO] send dummy requests
         memcpy(req->data + 8, base + 4, 32);
-        set_retry_send();
+        // set_retry_send();
         build_outgoing_packet(sizeof(ECP) + content_length);
         return 0;
       }
@@ -1400,17 +1421,27 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("send out", 8);
 #endif
               // pass out
-              set_retry_send();
+              // set_retry_send();
               build_outgoing_packet(sizeof(ECP) + cipher_length + 16);
               return 0;
             }
           } else {
             // memory
+#ifdef ICM_DEBUG
             icm_debug("memory", 6);
+#endif
             if (req->dest_offset >= target_page_length) {
+#ifdef ICM_DEBUG
               icm_debug("overflow", 8);
+#endif
               memset(icm_raw_data_base, 0, PAGE_SIZE);
             } else {
+#ifdef ICM_DEBUG
+              icm_debug(&(req->dest_offset), 4);
+              icm_debug(&target_page_length, 4);
+              int t = (call_frame - icm_config->call_stack);
+              icm_debug(&t, 4);
+#endif        
               aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
             }
           } 
