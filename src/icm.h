@@ -4,7 +4,7 @@
 #include "evm_controller.h"
 #include "aes.h"
 #include "keccak.h"
-// #include "uECC.h"
+// #include "micro-ecc/uECC.h"
 // #include "xsecure.h"
 
 // #define ICM_DEBUG

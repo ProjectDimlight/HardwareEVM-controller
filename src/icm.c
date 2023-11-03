@@ -326,26 +326,51 @@ uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
 
 ///////////////////////////////////////////////////////////////////
 
-uint8_t *ecdsa_hash(uint8_t *data, uint32_t size) {
-  /*
-  sha3_context *c = &sha_inst;
-  sha3_Init256(c);
-  sha3_SetFlags(&c, SHA3_FLAGS_KECCAK);
-  sha3_Update(c, data, size);
-  return sha3_Finalize(c);
-  */
-  return NULL;
+// Integrity check
+// User input: signed by user
+// User code: signed by user
+// Memory contents and call/return data: signed by user
+// Existing code: 
+//    - when storing locally: signed by fpga
+//    - Ethereum network only maintains the merkle proof of the entire code
+//    - fetch all code from host
+//    - get the merkle hash, and send the hash to user for verification
+// Storage: merkle proof
+//    - dump-out storage: signed by fpga
+
+/*
+void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t *priv_key) {
+  uint8_t *hash = ecdsa_hash(data, size);
+  uECC_sign(priv_key, hash, 32, out, icm_config->curve);
 }
 
-// void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size) {
-//   uint8_t *hash = ecdsa_hash(data, size);
-//   uECC_sign(icm_config->hevm_priv, hash, 32, out, icm_config->curve);
-// }
+int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t *pub_key) {
+  uint8_t *hash = ecdsa_hash(data, size);
+  return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
+}
 
-// int ecdsa_verify(uint8_t *in, uint8_t *data, uint32_t size, int is_user_key) {
-//   uint8_t *hash = ecdsa_hash(data, size);
-//   return uECC_verify(is_user_key ? icm_config->user_pub : icm_config->hevm_pub, hash, 32, in, icm_config->curve);
-// }
+void ecdsa_sign_page(uint8_t *out, uint8_t *data, uint32_t size, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *priv_key) {
+  uint8_t hash[32];
+  keccak_256_init();
+  keccak_256_update(data, size);
+  keccak_256_update(&src, 1);
+  keccak_256_update(&src_offset, 4);
+  keccak_256_update(&nonce, 8);
+  keccak_256_finalize(hash);
+  uECC_sign(priv_key, hash, 32, out, icm_config->curve);
+}
+
+int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint32_t size, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *pub_key) {
+  uint8_t hash[32];
+  keccak_256_init();
+  keccak_256_update(data, size);
+  keccak_256_update(&src, 1);
+  keccak_256_update(&src_offset, 4);
+  keccak_256_update(&nonce, 8);
+  keccak_256_finalize(hash);
+  return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
+}
+*/
 
 ///////////////////////////////////////////////////////////////////
 
@@ -1081,8 +1106,9 @@ uint8_t icm_decrypt() {
     icm_debug("recv env", 8);
 #endif
       } else if (req->dest == CODE) { // After internalize, this will be code only
-        memcpy(call_frame->code + req->dest_offset, req->data, padded_size(req->length, 4));
-        call_frame->code_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
+        call_frame->code_sign[sign_offset(req->dest_offset) + 63] = 1;          // mark as valid
+        call_frame->code_sign[sign_offset(req->dest_offset) + 62] = req->func;  // is cipher
+
 #ifdef ICM_DEBUG
         {
           icm_debug("recv code", 9);
@@ -1096,15 +1122,23 @@ uint8_t icm_decrypt() {
         }
 #endif
 
-        aes_decrypt(icm_raw_data_base, req->data, req->length);
-        if (req->length < PAGE_SIZE) {
+        // this page is encrypted
+        if (req->func) {
+          aes_decrypt(icm_raw_data_base, req->data, req->length);
+          if (req->length < PAGE_SIZE) {
+            memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
+            memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
+            aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
+          } else {
+            memcpy(call_frame->code + req->dest_offset, req->data, PAGE_SIZE);
+          }
+        } else {
+          memcpy(icm_raw_data_base, req->data, req->length);
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-          memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
-          aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
+          memcpy(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
         }
         // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
-        memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
         call_frame->input_sign[sign_offset(req->dest_offset) + 63] = 1;  // mark as valid
 #ifdef ICM_DEBUG
         icm_debug("recv input", 10);
@@ -1115,6 +1149,8 @@ uint8_t icm_decrypt() {
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
           memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
           aes_encrypt(call_frame->input + req->dest_offset, icm_config->buffer, PAGE_SIZE);
+        } else {
+          memcpy(call_frame->input + req->dest_offset, req->data, PAGE_SIZE);
         }
       } else if (req->dest == STACK) {
 #ifdef ICM_DEBUG
