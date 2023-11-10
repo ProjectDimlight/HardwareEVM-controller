@@ -135,7 +135,7 @@ void build_outgoing_packet(uint32_t len) {
 	uint8_t enable_reliable = 1, zero = 0;
 
 	ECP *p = buf_out;
-	if (p->opcode == 100 || p->opcode == DEBUG)
+	if (p->opcode == 100)
 		enable_reliable = 0;
 
 	pbuf_take_at(obuf, &enable_reliable, 1, 0);

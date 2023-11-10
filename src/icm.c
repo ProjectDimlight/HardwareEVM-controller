@@ -1133,6 +1133,7 @@ uint8_t icm_decrypt() {
             memcpy(call_frame->code + req->dest_offset, req->data, PAGE_SIZE);
           }
         } else {
+          icm_debug("plaintext code", 14);
           memcpy(icm_raw_data_base, req->data, req->length);
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
           memcpy(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
@@ -1447,9 +1448,14 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("received", 8);
               icm_debug(icm_raw_data_base, PAGE_SIZE);
 #endif
-              aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+              if (req->src != CODE || target_page_sign[sign_offset(req->dest_offset) + 62]) { // encrypted
+                aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+              } else {
+                icm_debug("plaintext code", 14);
+                memcpy(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+              }
             } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
-#ifdef ICM_DEBUGD
+#ifdef ICM_DEBUG
 #endif             
               aes_decrypt(icm_raw_data_base, icm_config->call_frame_pointer->locally_deployed_contract_code->code + req->dest_offset, PAGE_SIZE);
             } else {
