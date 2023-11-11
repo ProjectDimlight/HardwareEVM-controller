@@ -19,9 +19,9 @@
 
 // these address spaces are mapped to secure on chip memory
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
-void * const icm_temp_storage_base      = (void*)0xFFFD0000ll;   // temporary storage
-void * const icm_config_base            = (void*)0xFFFE0000ll;   // system configuration and sensitive data
-void * const icm_rt_base                = (void*)0xFFFF0000ll;   // runtime, stack and heap
+void * const icm_temp_storage_base      = (void*)0xFFFC8000ll;   // temporary storage
+void * const icm_config_base            = (void*)0xFFFD0000ll;   // system configuration and sensitive data
+void * const icm_rt_base                = (void*)0xFFFD2170ll;   // runtime, stack and heap
 
 uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_memory_sign_tmp[64 * PAGE_SIZE];
@@ -29,8 +29,8 @@ uint8_t icm_ram_return_tmp[16 * PAGE_SIZE];
 uint8_t icm_ram_return_sign_tmp[PAGE_SIZE];
 uint8_t icm_ram_deployed_code[1024 * PAGE_SIZE];
 
-ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFD0000ll;
-ICMConfig      * const icm_config       = (ICMConfig*)0xFFFE0000ll;
+ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFC8000ll;
+ICMConfig      * const icm_config       = (ICMConfig*)0xFFFD0000ll;
 
 uint8_t zero_page[PAGE_SIZE];
 
@@ -1013,6 +1013,9 @@ uint8_t icm_decrypt() {
     // do nothing
     return 1;
   } else if (req->opcode == CALL) {
+    // int t = sizeof(ICMConfig);
+    // icm_debug(&t, 4);
+
     // check integrity, return 0 if failed, and the tx will not run
 
     // check stack hash

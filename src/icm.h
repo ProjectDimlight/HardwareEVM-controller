@@ -128,9 +128,9 @@ typedef struct {
 } ICMStorageRecord;
 
 #define storage_record_size 85
-#define storage_record_count 771
-#define storage_padding 1
-#define storage_prime 769
+#define storage_record_count 385
+#define storage_padding 43
+#define storage_prime 383
 
 typedef struct {
   ICMStorageRecord  record[storage_record_count];
