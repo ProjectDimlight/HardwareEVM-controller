@@ -14,6 +14,8 @@ typedef uint8_t address_t[20];
 typedef uint8_t *address_p;
 typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
+typedef uint8_t ecc224_priv_t[28];
+typedef uint8_t ecc224_pub_t[56];
 
 enum ICMFunc{
   ICM_FINISH = 0,
@@ -74,6 +76,7 @@ typedef struct {
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
   uint32_t ocm_mem_pte, ocm_immutable_pte;
+  uint8_t immutable_page_type;
   uint8_t *immutable_page;
   uint8_t *immutable_page_sign;
   uint32_t immutable_page_length;
