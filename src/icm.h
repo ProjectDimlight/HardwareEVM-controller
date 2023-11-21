@@ -4,7 +4,7 @@
 #include "evm_controller.h"
 #include "aes.h"
 #include "keccak.h"
-// #include "micro-ecc/uECC.h"
+#include "uECC.h"
 // #include "xsecure.h"
 
 // #define ICM_DEBUG
@@ -94,10 +94,13 @@ typedef struct {
   ////////////////////////////////////////////
 
   struct AES_ctx aes_inst;
+
+  uint32_t rng_rec[32];
   
-  // uECC_Curve curve;
-  uint8_t hevm_pub[32], hevm_priv[32]; 
-  uint8_t user_pub[32];
+  uECC_Curve curve;
+  uint8_t curve_succeed;
+  uint8_t hevm_pub[64], hevm_priv[64];
+  uint8_t user_pub[64];
   uint8_t zero[64];
 
   // keccak space
