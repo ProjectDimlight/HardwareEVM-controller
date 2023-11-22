@@ -64,11 +64,11 @@ typedef struct __OCMStackFrame{
 
   // RAM pointers
   OCMDeployedCodeFrame *locally_deployed_contract_code;
-  uint8_t *code, *code_sign;
-  uint8_t *input, *input_sign;
+  uint8_t *code, *code_sign, *code_mark;
+  uint8_t *input, *input_sign, *input_mark;
   uint8_t *stack, *stack_sign;
   uint8_t *memory, *memory_sign;
-  uint8_t *top;
+  uint8_t *top, *sign_top;
 } OCMStackFrame;
 
 typedef struct {
@@ -116,6 +116,8 @@ typedef struct {
   OCMDeployedCodeFrame deployed_codes[16];
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
 
+  ////////////////////////////////////////////
+
   address_p contract_address_waiting_for_size;
   uint256_t contract_balance_after_transfer;
   uint8_t calling_precompiled;
@@ -124,6 +126,11 @@ typedef struct {
 
   uint32_t cesm_current_state;
   uint8_t  cesm_ready;
+
+  ////////////////////////////////////////////
+
+  uint8_t icm_ocm_stack_hash[3 * PAGE_SIZE];
+  uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
 
 } ICMConfig;
 
