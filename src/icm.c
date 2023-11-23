@@ -164,7 +164,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     // init
     init = 1;
     call_frame->top = icm_ram_stack;
-    call_frame->sign_top = icm_config_base->icm_ocm_stack_hash;
+    call_frame->sign_top = icm_config->icm_ocm_stack_hash;
 
 #ifdef ICM_DEBUG
     icm_debug("isroot", 6);
@@ -209,13 +209,13 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
 
   call_frame->code        = base;
   call_frame->input       = call_frame->code        + page_length(code_length);
-  call_frame->stack       = call_frame->input_sign  + sign_length(input_length);
-  call_frame->memory      = call_frame->stack_sign  + 32 * PAGE_SIZE;
+  call_frame->stack       = call_frame->input       + page_length(input_length);
+  call_frame->memory      = call_frame->stack       + 32 * PAGE_SIZE;
   call_frame->code_sign   = sign_base;
   call_frame->code_mark   = call_frame->code_sign   + sign_length(code_length);
-  call_frame->input_sign  = call_frame->code_mark   + PAGES(code_length);
+  call_frame->input_sign  = call_frame->code_mark   + mark_length(code_length);
   call_frame->input_mark  = call_frame->input_sign  + sign_length(input_length);
-  call_frame->stack_sign  = call_frame->input_mark  + PAGES(input_length);
+  call_frame->stack_sign  = call_frame->input_mark  + mark_length(input_length);
   call_frame->memory_sign = call_frame->stack_sign  + 32;
 
 #ifdef ICM_DEBUG
@@ -224,10 +224,10 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
 
   call_frame->locally_deployed_contract_code = icm_config->found_deployed_code;
 
-  for (char *p = call_frame->code_mark; i < call_frame->input_sign; i ++) {
+  for (char *p = call_frame->code_mark; p < call_frame->input_sign; p ++) {
     *p = 0;
   }
-  for (char *p = call_frame->input_mark; i < call_frame->stack_sign; i ++) {
+  for (char *p = call_frame->input_mark; p < call_frame->stack_sign; p ++) {
     *p = 0;
   }
 
@@ -360,7 +360,7 @@ int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  return memcmp(in, hash, 32);
+  return memcmp(in, hash, 32) == 0;
 }
 
 void hash_sign_page(uint8_t *out, uint8_t *data, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *priv_key) {
@@ -381,7 +381,7 @@ int hash_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offse
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  return memcmp(in, hash, 32);
+  return memcmp(in, hash, 32) == 0;
 }
 
 int ecdsa_rng(uint8_t *dest, unsigned size) {
@@ -627,7 +627,7 @@ void icm_end(uint8_t func) {
   // copy memory as returndata
   icm_config->immutable_page_type = RETURNDATA;
   icm_config->immutable_page = icm_ram_return_tmp;
-  icm_config->immutable_page_sign = icm_ram_return_sign_tmp;
+  icm_config->immutable_page_sign = icm_config->icm_ocm_return_sign_tmp;
   if (func == OP_RETURN || func == OP_REVERT) {
     icm_config->cesm_ready = 0;
 
@@ -654,6 +654,7 @@ void icm_tmp_test() {
   ecdsa_rng(a, 16);
   icm_debug(a, 16);
   
+  /*
   uint8_t data[64], sign[64];
   for (int i = 0; i < 64; i++) {
     data[i] = i;
@@ -662,6 +663,7 @@ void icm_tmp_test() {
   int res = ecdsa_verify(sign, data, 64, STACK, 0, icm_config->hevm_pub);
   icm_debug("test signature verify", 21);
   icm_debug(&res, 4);
+  */
 }
 
 void icm_step() {
@@ -756,10 +758,6 @@ void icm_call_end_state_machine() {
 
       cesm_state = CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY;
     } else {
-      icm_debug("move memory sign", 16);
-      icm_debug(&(icm_ram_memory_sign_tmp), 4);
-      icm_debug(icm_ram_memory_sign_tmp, sign_length(call_frame->memory_length));
-      icm_debug(&(call_frame->memory_length), 4);
       // stack push
       icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value, icm_config->contract_balance_after_transfer);
 #ifdef ICM_DEBUG
@@ -814,7 +812,7 @@ void icm_call_end_state_machine() {
     
     icm_config->immutable_page_type = RETURNDATA;
     icm_config->immutable_page = icm_ram_return_tmp;
-    icm_config->immutable_page_sign = icm_ram_return_sign_tmp;
+    icm_config->immutable_page_sign = icm_config->icm_ocm_return_sign_tmp;
     icm_config->immutable_page_length = 0;
     
     cesm_state = CESM_WAIT_FOR_PRECOMPILED_EXECUTION;
@@ -956,11 +954,6 @@ void icm_call_end_state_machine() {
     }
 
     icm_stack_pop();
-    
-    icm_debug("move memory sign", 16);
-    icm_debug(&(icm_ram_memory_sign_tmp), 4);
-    icm_debug(icm_ram_memory_sign_tmp, sign_length(call_frame->memory_length));
-    icm_debug(&(call_frame->memory_length), 4);
 
     if (icm_stack_is_empty()) {
       cesm_state = CESM_IDLE;

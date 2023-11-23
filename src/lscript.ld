@@ -24,8 +24,8 @@ MEMORY
    psu_ddr_0_MEM_0 : ORIGIN = 0x0, LENGTH = 0x7FF00000
    psu_ocm_ram_0_MEM_0 : ORIGIN = 0xFFFC0000, LENGTH = 0x40000
    psu_qspi_linear_0_MEM_0 : ORIGIN = 0xC0000000, LENGTH = 0x20000000
-   ocm_rt_space  : ORIGIN = 0xFFFD3000, LENGTH = 0x2d000
-   ocm_logic_space  : ORIGIN = 0xFFFC0000, LENGTH = 0x13000
+   ocm_rt_space  : ORIGIN = 0xFFFD6000, LENGTH = 0x2a000
+   ocm_logic_space  : ORIGIN = 0xFFFC0000, LENGTH = 0x16000
 }
 
 /* Specify the default entry point to the program */
