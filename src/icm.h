@@ -132,18 +132,23 @@ typedef struct {
   uint8_t icm_ocm_stack_hash[3 * PAGE_SIZE];
   uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
 
+  ////////////////////////////////////////////
+
+  uint32_t count_storage_records;
+
 } ICMConfig;
 
 typedef struct {
   uint256_t k;
   uint256_t v;
+  uint256_t v_origin;
   address_t a;
 } ICMStorageRecord;
 
-#define storage_record_size 85
-#define storage_record_count 385
-#define storage_padding 43
-#define storage_prime 383
+#define storage_record_size 117
+#define storage_record_count 280
+#define storage_padding 8
+#define storage_prime 277
 
 typedef struct {
   ICMStorageRecord  record[storage_record_count];

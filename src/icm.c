@@ -92,8 +92,8 @@ void icm_dump_storage() {
   uint64_t count = 0, content_length = 4;
   for (uint64_t i = 0; i < storage_prime; i++)
   if (icm_temp_storage->valid[i]) {
-    memcpy((res->data) + content_length, &(icm_temp_storage->record[i]), 84);
-    count++; content_length += 84;
+    memcpy((res->data) + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
+    count++; content_length += sizeof(ICMStorageRecord);
     icm_temp_storage->valid[i] = 0;
   }
   // finalize: send remaining records
@@ -1079,6 +1079,19 @@ uint8_t icm_decrypt() {
       icm_clear_storage();
     } else if (req->func == ICM_SET_USER_PUB) {
       // uECC_decompress(req->data, icm_config->user_pub, uECC_secp224r1());
+      memcpy(icm_config->user_pub, req->data, 56);
+
+      ECP *res = get_output_buffer();
+      res->opcode = ICM;
+      res->src = CONTROL;
+      res->dest = HOST;
+      res->func = ICM_SET_USER_PUB;
+      res->src_offset = 0;
+      res->dest_offset = 0;
+      res->length = 56;
+      memcpy(res->data, icm_config->hevm_pub, 56);
+
+      build_outgoing_packet(sizeof(ECP) + 56);
     } else if (req->func == ICM_SET_CONTRACT) {
       if (icm_config->contract_address_waiting_for_size &&
         memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
@@ -1101,6 +1114,13 @@ uint8_t icm_decrypt() {
     return 1;
   } else if (req->opcode == CALL) {
     icm_tmp_test();
+
+    icm_config->count_storage_records = 0;
+
+    // check keys
+    icm_debug("check ecdsa keys", 16);
+    icm_debug(icm_config->user_pub, 56);
+    icm_debug(icm_config->hevm_pub, 56);
 
     // check integrity, return 0 if failed, and the tx will not run
 
@@ -1175,13 +1195,39 @@ uint8_t icm_decrypt() {
         return 0;
       }
 
-      // [TODO] check merkle proof
-
       // plaintext need not decrypt
       memcpy(icm_raw_data_base, req->data, req->length);
 #ifdef ICM_DEBUG
       icm_debug(icm_raw_data_base, req->length);
 #endif
+
+      void *base = icm_raw_data_base;
+      uint32_t num_of_items = *(uint32_t*)base;
+      uint32_t offset = 4;
+      icm_config->count_storage_records ++;
+
+      for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
+        uint32_t id = icm_find(base + offset);
+
+        if (id == storage_prime) {
+          icm_dump_storage();
+          id = icm_find(base + offset);
+        }
+
+        // OCM need not encryption
+        icm_temp_storage->valid[id] = 1;
+        memcpy(&(icm_temp_storage->record[id].k), base + offset + 0 , 32);
+        memcpy(&(icm_temp_storage->record[id].v), base + offset + 32, 32);
+        memcpy(&(icm_temp_storage->record[id].v_origin), base + offset + 32, 32);
+        // also, copy the address of the current contract
+        memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
+
+#ifdef ICM_DEBUG
+        icm_debug(&(icm_temp_storage->record[id].k), 32);
+        icm_debug(&(icm_temp_storage->record[id].v), 32);
+#endif
+      }
+
       return 1;
     } else {  // memory like
       // the size of memory pages are always multiples of 16
@@ -1221,11 +1267,18 @@ uint8_t icm_decrypt() {
           } else {
             memcpy(call_frame->code + req->dest_offset, req->data, PAGE_SIZE);
           }
+          // verify user hash
+          if (ecdsa_verify_page(req->data, icm_raw_data_base, CODE, req->dest_offset, 0, icm_config->user_pub)) {
+            icm_debug("user code page verification failed!", 35);
+          }
+          
         } else {
           icm_debug("plaintext code", 14);
           memcpy(icm_raw_data_base, req->data, req->length);
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
           memcpy(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
+          // [TODO] calculate whole code hash and send back to user
+          // [TODO] prefetch
         }
         // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
@@ -1241,6 +1294,11 @@ uint8_t icm_decrypt() {
           aes_encrypt(call_frame->input + req->dest_offset, icm_config->buffer, PAGE_SIZE);
         } else {
           memcpy(call_frame->input + req->dest_offset, req->data, PAGE_SIZE);
+        }
+
+        // verify user hash
+        if (ecdsa_verify_page(req->data, icm_raw_data_base, CALLDATA, req->dest_offset, 0, icm_config->user_pub)) {
+          icm_debug("user calldata page verification failed!", 39);
         }
       } else if (req->dest == STACK) {
 #ifdef ICM_DEBUG
@@ -1305,6 +1363,9 @@ uint8_t icm_encrypt(uint32_t length) {
     icm_call(req->func);
     return 0;
   } else if (req->opcode == END) {
+    icm_debug("STORAGE cnt:", 12);
+    icm_debug(&(icm_config->count_storage_records), 4);
+    
     icm_end(req->func);
     return 0;
   } else {
@@ -1324,7 +1385,6 @@ uint8_t icm_encrypt(uint32_t length) {
           }
 
           // OCM need not encryption
-          icm_temp_storage->valid[id] = 1;
           memcpy(&(icm_temp_storage->record[id].k), base + offset + 0 , 32);
           memcpy(&(icm_temp_storage->record[id].v), base + offset + 32, 32);
           // also, copy the address of the current contract
@@ -1367,7 +1427,7 @@ uint8_t icm_encrypt(uint32_t length) {
 
           // OCM need no encryption
           icm_temp_storage->valid[id] = 1;
-          memcpy(&(icm_temp_storage->record[id]), base, 64);
+          memcpy(&(icm_temp_storage->record[id].k), base, 64);
           // also, copy the address of the current contract
           memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
 
@@ -1533,10 +1593,17 @@ uint8_t icm_encrypt(uint32_t length) {
 
           int end = req->src == OCM_IMMUTABLE_MEM &&
                     cesm_state == CESM_WAIT_FOR_RETURN_COPY && icm_stack_is_root();
-          hash_sign_page(target_page_sign + sign_offset(req->src_offset), icm_raw_data_base, target_page_type, req->src_offset, 0, icm_config->hevm_priv);
-          icm_debug(&target_page_type, 1);
-          icm_debug(&(req->src_offset), 4);
-          icm_debug(&(target_frame->memory_length), 4);
+
+          if (end) {
+            // sign with ecdsa
+            ecdsa_sign_page(ecp->data + content_length, icm_raw_data_base, RETURNDATA, req->src_offset, 0, icm_config->hevm_priv);
+          } else {
+            // sign internally
+            hash_sign_page(target_page_sign + sign_offset(req->src_offset), icm_raw_data_base, target_page_type, req->src_offset, 0, icm_config->hevm_priv);
+            icm_debug(&target_page_type, 1);
+            icm_debug(&(req->src_offset), 4);
+            icm_debug(&(target_frame->memory_length), 4);
+          }
 
           cipher_length = aes_encrypt(target_page + req->src_offset, icm_raw_data_base, content_length);
 
@@ -1551,7 +1618,8 @@ uint8_t icm_encrypt(uint32_t length) {
             ecp->dest_offset = req->dest_offset;
             ecp->length = content_length;
             memcpy(ecp->data, target_page + req->src_offset, cipher_length);
-            build_outgoing_packet(sizeof(ECP) + cipher_length);
+
+            build_outgoing_packet(sizeof(ECP) + cipher_length + 56);
             return 1;
           }
         }
