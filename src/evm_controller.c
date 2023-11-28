@@ -51,9 +51,9 @@ void* const evm_storage_key     = (void*)0x410041000ll;
 void* const evm_storage_wbMap   = (void*)0x410042000ll;
 void* const evm_storage_reset   = (void*)0x410043000ll;
 
-void* const evm_stack_flush     = (void*)0x410060004ll;
+void* const evm_stack_flush     = (void*)0x410068000ll;
+void* const evm_stack_counter   = (void*)0x410064000ll;
 
-void* const evm_env_stack_size       = evm_env_addr + 0x0e * 32;
 void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
 void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
 void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
@@ -99,15 +99,17 @@ void dma_read_storage_slot(uint32_t index, void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 6;
-  *(uint32_t*)dma_config_addr = 0x1;
+  *(uint32_t*)dma_config_addr = 0x0;
+  Xil_DCacheFlush();
   dma_wait();
 }
 
 void dma_write_storage_slot(uint32_t index, void* srcAddr) {
+  Xil_DCacheFlush();
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_length_addr = 1 << 6;
-  *(uint32_t*)dma_config_addr = 0x3;
+  *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
 
@@ -115,23 +117,26 @@ void dma_read_storage_key(void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_key;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 5;
-  *(uint32_t*)dma_config_addr = 0x1;
+  *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
+  Xil_DCacheFlush();
 }
 
 void dma_read_stack(uint32_t itemNum, void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
-  *(uint32_t*)dma_config_addr = 0x1;
+  *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
+  Xil_DCacheFlush();
 }
 
 void dma_write_stack(uint32_t itemNum, void* srcAddr) {
+  Xil_DCacheFlush();
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
-  *(uint32_t*)dma_config_addr = 0x3;
+  *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
 
@@ -139,16 +144,51 @@ void dma_read_env(void* env_addr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)env_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)&env_reg_buffer;
   *(uint32_t*)dma_length_addr = 1 << 5;
-  *(uint32_t*)dma_config_addr = 0x1;
+  *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
+  Xil_DCacheFlush();
 }
 
 void dma_write_env(void* env_addr) {
+  Xil_DCacheFlush();
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)&env_reg_buffer;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)env_addr;
   *(uint32_t*)dma_length_addr = 1 << 5;
-  *(uint32_t*)dma_config_addr = 0x3;
+  *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
+}
+
+void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length) {
+  *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
+  *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
+  *(uint32_t*)dma_length_addr = length;
+  *(uint32_t*)dma_config_addr = 0x0;
+  dma_wait();
+  Xil_DCacheFlush();
+}
+
+void dma_write_mem(void* src_addr, void* dst_addr, uint32_t length) {
+  Xil_DCacheFlush();
+  icm_debug("dma write mem", 13);
+  *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
+  *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
+  *(uint32_t*)dma_length_addr = length;
+  *(uint32_t*)dma_config_addr = 0x2;
+  dma_wait();
+}
+
+void dma_memcpy(void* dst_addr, void* src_addr, uint32_t length) {
+  uint32_t dst = ((uint64_t)dst_addr >> 32), src = ((uint64_t)src_addr >> 32);
+  if (dst && !src) {
+    dma_write_mem(src_addr, dst_addr, length);
+  } else if (!dst && src) {
+    dma_read_mem(src_addr, dst_addr, length);
+  } else if (!dst && !src) {
+    memcpy(dst_addr, src_addr, length);
+  } else {
+    dma_read_mem(src_addr, icm_raw_data_base, length);
+    dma_write_mem(icm_raw_data_base, dst_addr, length);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -182,7 +222,7 @@ void evm_clear_stack() {
 
 uint32_t evm_store_stack(uint32_t num_of_params) {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
-  uint32_t count = *(uint32_t*)evm_env_stack_size;
+  uint32_t count = *(uint32_t*)evm_stack_counter;
   if (num_of_params >= 0 && num_of_params <= count)
     count = num_of_params;
   dma_read_stack(count, data + 1);
@@ -265,23 +305,20 @@ void evm_clear_storage() {
 
 void evm_dump_memory() {
   ECP *buf = get_output_buffer();
-  uint8_t* data8 = (uint8_t*)icm_raw_data_base;
   uint8_t *memory = (uint8_t*)evm_mem_addr;
   for (int i = 0; i < NUMBER_OF_PAGES; i++) {
     uint32_t pte = *data_source_to_pte(MEM, i << 10);
     if ((pte & 2) == 0)  // empty
       continue;
-    
     memset(buf, 0, sizeof(ECP));
     buf->opcode = COPY;
     buf->src = MEM;
     buf->dest = HOST;
     buf->src_offset = pte & page_tagid_mask;
     buf->dest_offset = 0;
-    buf->length = 1024;
-    memcpy_b(data8, memory + (i << 10), 1024);
+    buf->length = PAGE_SIZE;
+    dma_read_mem(memory + (i << 10), icm_raw_data_base, PAGE_SIZE);
     icm_encrypt(sizeof(ECP) + buf->length);
-
     // clear mem cache
     *data_source_to_pte(MEM, i << 10) = 0;
   }
@@ -289,15 +326,7 @@ void evm_dump_memory() {
 
 void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
   void *addr_dest = data_source_to_address(dest, dest_offset);
-  if (dest == ENV) {
-    *(uint32_t*)dma_srcAddr_addr = (uint32_t)icm_raw_data_base;
-    *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_env_addr;
-    *(uint32_t*)dma_length_addr = PAGE_SIZE;
-    *(uint32_t*)dma_config_addr = 0x3;
-    dma_wait();
-  } else {
-    memcpy_b(addr_dest, icm_raw_data_base, PAGE_SIZE);
-  }
+  dma_write_mem(icm_raw_data_base, addr_dest, PAGE_SIZE);
   if (dest != ENV) {
     // update page table
     uint32_t *pte = data_source_to_pte(dest, dest_offset);
@@ -320,12 +349,12 @@ uint8_t async_page_swap(uint8_t dirty, uint8_t src, uint32_t src_offset, uint32_
   buf->dest = HOST;
   buf->src_offset = src_offset;
   buf->dest_offset = dest_offset;
-  buf->length = 1024;
+  buf->length = PAGE_SIZE;
 
   uint8_t ready;
   if (dirty) {
     buf->func = 1;
-    memcpy_b(icm_raw_data_base, data_source_to_address(src, src_offset), PAGE_SIZE);
+    dma_read_mem(data_source_to_address(src, src_offset), icm_raw_data_base, PAGE_SIZE);
     ready = icm_encrypt(sizeof(ECP) + PAGE_SIZE);
   } else {
     buf->func = 0;
@@ -349,16 +378,16 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
   buf->dest = HOST;
   buf->src_offset = src_offset;
   buf->dest_offset = 0;
-  buf->length = 1024;
+  buf->length = PAGE_SIZE;
 
   buf->func = 1;
-  memcpy_b(icm_raw_data_base, data_source_to_address(src, src_offset), 1024);
+  dma_read_mem(data_source_to_address(src, src_offset), icm_raw_data_base, PAGE_SIZE);
   icm_encrypt(sizeof(ECP) + 1024);
 }
 
 void evm_memory_copy(ECP *req) {
   if (req) {
-    // icm_debug("memcopy", 7);
+    icm_debug("req memcopy", 11);
     pending_evm_memory_copy_request.ecp = *req;
     if (req->src == RETURNDATA) {
       pending_evm_memory_copy_request.ecp.src = OCM_IMMUTABLE_MEM;
@@ -421,7 +450,7 @@ void evm_memory_copy(ECP *req) {
     icm_debug("memcopy", 7);
 #endif
     
-    memcpy_b(addr_dest, addr_src, step_length);
+    dma_memcpy(addr_dest, addr_src, step_length);
     *pte_dest |= 0x3;
 
 #ifdef ICM_DEBUG
@@ -443,7 +472,6 @@ void evm_memory_copy(ECP *req) {
   }
 
   // finalize
-  // icm_debug("memcopy fin", 11);
   if (req->dest == OCM_MEM || req->dest == OCM_IMMUTABLE_MEM) {
     pte_dest = data_source_to_pte(req->dest, 0);
     sync_page_dump(((*pte_dest) & 3) == 3, req->dest, (*pte_dest) & page_tagid_mask);
@@ -496,7 +524,6 @@ void handle_ecp(ECP *in) {
 #ifdef ICM_DEBUG
   icm_debug(req, 16);
 #endif
-  icm_debug(req, 16);
 
   if (req->src == HOST) {
     if (req->opcode == CALL) {
@@ -595,7 +622,7 @@ void handle_ecp(ECP *in) {
       icm_debug(req, 16);
 #endif
       if (req->func) { // has dirty page to send back
-        memcpy_b(icm_raw_data_base, data_source_to_address(req->src, req->src_offset), req->length);
+        dma_memcpy(icm_raw_data_base, data_source_to_address(req->src, req->src_offset), req->length);
       } else {
         content_length = 0;
       }
@@ -736,14 +763,14 @@ void handle_ecp(ECP *in) {
   else if (req->opcode == QUERY) {
 #ifdef ICM_DEBUG
     icm_debug("query", 5);
-    uint32_t* stackSize = (uint32_t*)(evm_env_stack_size);
+    uint32_t* stackSize = (uint32_t*)(evm_stack_counter);
     uint32_t s = *stackSize;
     icm_debug(&s, 4);
 #endif
     // queries need an address (or blockid) as param
     // which is always located at the top of the stack
     content_length = 32;
-    memcpy_b(icm_raw_data_base, evm_stack_addr, content_length);
+    dma_read_stack(1, icm_raw_data_base);
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
     volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
     *stackOp = 0;  // pop the address
@@ -753,10 +780,8 @@ void handle_ecp(ECP *in) {
     }
 
     if (icm_encrypt(sizeof(ECP) + content_length)) {
-      // locally deployed code
-      uint8_t* stackData = (uint8_t*)(evm_stack_addr + 0x8000);
-      memcpy_b(stackData, icm_raw_data_base, 32);
-      *stackOp = 1;  // push
+      // locally deployed 
+      dma_write_stack(1, icm_raw_data_base);
       ready = 1; 
     } else {
       wait_for_query = 1;

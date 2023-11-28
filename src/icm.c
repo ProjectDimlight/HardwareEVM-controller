@@ -292,16 +292,10 @@ uint32_t padded_size(uint32_t size, uint32_t block_width) {
 }
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-#ifdef ICM_DEBUG
-  icm_debug("decrypt", 7);
-#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 4);
   memcpy(out, in, size);
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
-#ifdef ICM_DEBUG
-  icm_debug("decrypt finish", 14);
-#endif
 }
 
 void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
@@ -313,16 +307,10 @@ void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
 }
 
 uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-#ifdef ICM_DEBUG
-  icm_debug("encrypt", 7);
-#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 4);
   AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
   memcpy(out, in, size);
-#ifdef ICM_DEBUG
-  icm_debug("encrypt finish", 14);
-#endif
   return size;
 }
 
@@ -1027,7 +1015,8 @@ uint8_t icm_decrypt() {
     if (icm_config->found_deployed_code) {
       code_length = icm_config->found_deployed_code->length;
     } else {
-      memcpy_b(&code_length, evm_env_code_size, 4);
+      dma_read_env(evm_env_code_size);
+      memcpy_b(&code_length, env_reg_buffer, 4);
     }
     dma_read_env(evm_env_calldata_size), memcpy_b(&input_length, env_reg_buffer, 4);
     dma_read_env(evm_env_gas), memcpy_b(&gas, env_reg_buffer, 8);
@@ -1401,7 +1390,7 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("send out", 8);
 #endif
               // pass out
-              set_retry_send();
+              // set_retry_send();
               build_outgoing_packet(sizeof(ECP) + cipher_length + 16);
               return 0;
             }
