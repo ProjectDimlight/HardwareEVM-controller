@@ -99,9 +99,13 @@ void icm_dump_storage() {
   res->length = content_length;
   *(uint32_t*)res->data = count;
 
+  // the signature is calculated over plaintext
+  uint32_t sign_offset = padded_size(content_length, 4);
+  ecdsa_sign(res->data + sign_offset, icm_raw_data_base, STORAGE, 0, icm_config->hevm_priv);
+  
   // encrypt storage elements
-  // uint32_t sign_offset = 4 + aes_encrypt(res->data + 4, icm_raw_data_base + 4, content_length - 4);
-  // content_length = sign_offset;
+  aes_encrypt(res->data, icm_raw_data_base, content_length);
+  content_length = sign_offset + 56;
 
   build_outgoing_packet(sizeof(ECP) + content_length);
 }
@@ -396,6 +400,21 @@ int ecdsa_rng(uint8_t *dest, unsigned size) {
   // icm_debug(&size, 4);
   // icm_debug(dest, size);
   return 1;
+}
+
+void ecdsa_sign(uint8_t *out, uint8_t *data, uint8_t src, uint64_t nonce, uint8_t *priv_key) {
+  uint8_t hash[32];
+  keccak_256_init();
+  keccak_256_update(data, PAGE_SIZE);
+  keccak_256_update(&src, 1);
+  keccak_256_update(&nonce, 8);
+  keccak_256_finalize(hash);
+// #ifdef ICM_DEBUG
+  icm_debug("storage hash", 12);
+  icm_debug(hash, 32);
+// #endif
+  uint8_t res = uECC_sign(priv_key, hash, 32, out, icm_config->curve);
+  icm_debug(out, 64);
 }
 
 void ecdsa_sign_page(uint8_t *out, uint8_t *data, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *priv_key) {
@@ -1696,5 +1715,4 @@ uint8_t icm_encrypt(uint32_t length) {
 }
 
 void prefetch() {
-  
 }
