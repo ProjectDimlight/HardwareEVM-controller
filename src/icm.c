@@ -34,15 +34,10 @@ uint8_t zero_page[PAGE_SIZE];
 ///////////////////////////////////////////////////////////////////
 
 void icm_debug(void *data, uint32_t length) {
-  void *out = get_output_buffer();
-  uint8_t tmp[16];
-  memcpy(tmp, out, 16);
-  
+  void *out = get_debug_buffer();
   memcpy(out, "dbug", 4);
   memcpy(out + 4, data, length);
-  build_outgoing_packet(4 + length);
-
-  memcpy(out, tmp, 16);
+  build_debug_packet(4 + length);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -75,39 +70,6 @@ uint32_t icm_find(uint256_t key) {
     return storage_prime;
   else 
     return hash;
-}
-
-void icm_dump_storage() {
-  // dump storage from OCM to HOST
-  ECP *res = get_output_buffer();
-  //memcpy(res, req, sizeof(ECP));
-  res->opcode = COPY;
-  res->src = STORAGE;
-  res->dest = HOST;
-  res->func = 1;
-  res->src_offset = 0;
-  res->dest_offset = 0;
-
-  uint64_t count = 0, content_length = 4;
-  for (uint64_t i = 0; i < storage_prime; i++)
-  if (icm_temp_storage->valid[i]) {
-    memcpy((res->data) + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
-    count++; content_length += sizeof(ICMStorageRecord);
-    icm_temp_storage->valid[i] = 0;
-  }
-  // finalize: send remaining records
-  res->length = content_length;
-  *(uint32_t*)res->data = count;
-
-  // the signature is calculated over plaintext
-  uint32_t sign_offset = padded_size(content_length, 4);
-  ecdsa_sign(res->data + sign_offset, icm_raw_data_base, STORAGE, 0, icm_config->hevm_priv);
-  
-  // encrypt storage elements
-  aes_encrypt(res->data, icm_raw_data_base, content_length);
-  content_length = sign_offset + 56;
-
-  build_outgoing_packet(sizeof(ECP) + content_length);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -402,19 +364,16 @@ int ecdsa_rng(uint8_t *dest, unsigned size) {
   return 1;
 }
 
-void ecdsa_sign(uint8_t *out, uint8_t *data, uint8_t src, uint64_t nonce, uint8_t *priv_key) {
+void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t src, uint64_t nonce, uint8_t *priv_key) {
   uint8_t hash[32];
   keccak_256_init();
-  keccak_256_update(data, PAGE_SIZE);
+  keccak_256_update(data, size);
   keccak_256_update(&src, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-// #ifdef ICM_DEBUG
-  icm_debug("storage hash", 12);
   icm_debug(hash, 32);
-// #endif
+  // icm_debug(data, size);
   uint8_t res = uECC_sign(priv_key, hash, 32, out, icm_config->curve);
-  icm_debug(out, 64);
 }
 
 void ecdsa_sign_page(uint8_t *out, uint8_t *data, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *priv_key) {
@@ -425,12 +384,7 @@ void ecdsa_sign_page(uint8_t *out, uint8_t *data, uint8_t src, uint32_t src_offs
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-#ifdef ICM_DEBUG
-  icm_debug("page hash", 10);
-  icm_debug(hash, 32);
-#endif
   uint8_t res = uECC_sign(priv_key, hash, 32, out, icm_config->curve);
-  icm_debug(out, 64);
 }
 
 int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *pub_key) {
@@ -441,11 +395,6 @@ int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offs
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-#ifdef ICM_DEBUG
-  icm_debug("page hash verify", 17);
-  icm_debug(hash, 32);
-  icm_debug(in, 64);
-#endif
   return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
 }
 
@@ -489,6 +438,42 @@ uint8_t icm_check_storage_signature(rsa2048_t sign_c) {
 
   // compare, return 1 if valid
   return memcmp(real, sign, sizeof(uint256_t)) == 0;
+}
+
+void icm_dump_storage() {
+  // dump storage from OCM to HOST
+  ECP *res = get_output_buffer();
+  //memcpy(res, req, sizeof(ECP));
+  res->opcode = COPY;
+  res->src = STORAGE;
+  res->dest = HOST;
+  res->func = 1;
+  res->src_offset = 0;
+  res->dest_offset = 0;
+
+  uint64_t count = 0, content_length = 4;
+  for (uint64_t i = 0; i < storage_prime; i++)
+  if (icm_temp_storage->valid[i]) {
+    memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
+    count++; content_length += sizeof(ICMStorageRecord);
+    icm_temp_storage->valid[i] = 0;
+
+    //if (count >= 20) break;
+  }
+  *(uint32_t*)icm_raw_data_base = count;
+  
+  res->length = content_length;
+
+  // the signature is calculated over plaintext
+  uint32_t sign_offset = padded_size(content_length, 4);
+  ecdsa_sign(res->data + sign_offset, icm_raw_data_base, content_length, STORAGE, 0, icm_config->hevm_priv);
+
+  // encrypt storage elements
+  aes_encrypt(res->data, icm_raw_data_base, content_length);
+  // memcpy(res->data, icm_raw_data_base, content_length);
+  content_length = sign_offset + 56;
+
+  build_outgoing_packet(sizeof(ECP) + content_length);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -1093,11 +1078,16 @@ void icm_call_end_state_machine() {
 uint8_t icm_decrypt() {
   ECP *req = get_input_buffer() + 4;
 
+  icm_debug(req, 16);
+
   if (req->opcode == ICM) {
     if (req->func == ICM_CLEAR_STORAGE) {
       icm_clear_storage();
     } else if (req->func == ICM_SET_USER_PUB) {
+      reset_udp();
       uECC_decompress(req->data, icm_config->user_pub, icm_config->curve);
+
+      icm_debug("here", 4);
 
       ECP *res = get_output_buffer();
       res->opcode = ICM;
@@ -1186,7 +1176,6 @@ uint8_t icm_decrypt() {
   } else if (req->opcode == END) {
     // External force quit
     reset_udp();
-    
     return 1;
   } else {
     if (req->src == STORAGE) { // this request is sent from host

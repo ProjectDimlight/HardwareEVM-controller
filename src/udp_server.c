@@ -47,7 +47,7 @@ static ip_addr_t taddr;
 static u16_t tport;
 
 uint8_t buf_in[65536];
-uint8_t buf_out[65536];
+uint8_t buf_out[65536], buf_debug[65536];
 uint32_t input_size;
 uint8_t input_valid;
 
@@ -57,6 +57,10 @@ void *get_input_buffer() {
 
 void *get_output_buffer() {
   return buf_out;
+}
+
+void *get_debug_buffer() {
+  return buf_debug;
 }
 
 void trigger_input() {
@@ -77,6 +81,8 @@ void reset_udp() {
 	}
 	expected_reply_id = 0;
 	request_id = 0;
+
+	icm_debug("reset udp", 9);
 }
 
 void retry_send() {
@@ -154,6 +160,19 @@ void build_outgoing_packet(uint32_t len) {
 		udp_sendto(tpcb, obuf, &taddr, tport);
 		pbuf_free(obuf);
 	}
+}
+
+void build_debug_packet(uint32_t len) {
+	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
+	struct pbuf *obuf = NULL;
+	obuf = pbuf_alloc(PBUF_TRANSPORT, 4 + len, PBUF_POOL);
+	
+	uint32_t zero = 0;
+	pbuf_take_at(obuf, &zero, 4, 0);
+	pbuf_take_at(obuf, buf_debug, len, 4);
+
+	udp_sendto(tpcb, obuf, &taddr, tport);
+	pbuf_free(obuf);
 }
 
 static void build_incoming_packet(struct pbuf *p) {
