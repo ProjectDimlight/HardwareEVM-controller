@@ -84,8 +84,8 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  uint256_t block_hash;
-  uint8_t stack_integrity_valid;
+  uint8_t integrity_valid;
+  uint8_t check_signature_of_immutable_mem;
 
   ////////////////////////////////////////////
 
