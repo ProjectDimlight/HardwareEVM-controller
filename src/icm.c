@@ -166,7 +166,6 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   } else {
     dma_read_env(evm_env_pc), call_frame->pc = env_reg_buffer[0];
     dma_read_env(evm_env_msize), call_frame->msize = env_reg_buffer[0];
-    dma_read_env(evm_env_msize), call_frame->msize = env_reg_buffer[0];
     dma_read_env(evm_env_gas), call_frame->gas = ((uint64_t)env_reg_buffer[1] << 32) | env_reg_buffer[0];
     call_frame->pc ++;  // step to the next inst
 
@@ -197,7 +196,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->msize = 0;
   call_frame->pc = 0;
   call_frame->gas = gas;
-  memcpy_b(call_frame->value, value, sizeof(uint256_t));
+  dma_memcpy(call_frame->value, value, sizeof(uint256_t));
 
 #ifdef ICM_DEBUG
   icm_debug("call frame set meta", 19);
@@ -401,7 +400,6 @@ void icm_code_hash(uint8_t *code_hash_output, uint8_t *code_page, uint32_t code_
 
   // The code is the content of the returndata
   keccak_256_init();
-  // here just test for keccak256 lib, only 1 page code
   for (uint32_t i = 0; i < code_length; i += PAGE_SIZE) {
     uint32_t len = i + PAGE_SIZE < code_length ? PAGE_SIZE : code_length - i;
     aes_decrypt(icm_raw_data_base, code_page, len);
@@ -612,7 +610,7 @@ void icm_call_end_state_machine() {
       call_frame->ret_offset = *(uint32_t*)(evm_stack + 32 * 4);
       call_frame->ret_size = *(uint32_t*)(evm_stack + 32 * 5);
     } else { // CREATE, CREATE2
-      gas = *(uint64_t*)evm_env_gas;
+      dma_read_env(evm_env_gas), memcpy_b(&gas, env_reg_buffer, 8);
       callee_address = icm_config->zero;
       callee_storage_address = SELF_ADDRESS;
       callee_caller_address = call_frame->address;
@@ -623,7 +621,6 @@ void icm_call_end_state_machine() {
       size = *(uint32_t*)(evm_stack + 32 * 2);
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
-      
       memcpy(icm_config->contract_balance_after_transfer, value, 32);
     }
 
@@ -906,7 +903,11 @@ void icm_call_end_state_machine() {
       memset(icm_raw_data_base + 4, 0, 32);
       *(uint8_t*)(icm_raw_data_base + 4) = (call_frame + 1)->call_end_func != OP_REVERT;
     }
-    aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * new_stack_size);
+    aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * (new_stack_size - 1));
+    icm_debug("recover stack", 13);
+    icm_debug(&call_frame->stack_size, 4);
+    icm_debug(&new_stack_size, 4);
+    icm_debug(icm_raw_data_base + 4, new_stack_size * 32);
     evm_load_stack(1);
 
     if (icm_config->calling_precompiled) {
@@ -933,7 +934,8 @@ void icm_call_end_state_machine() {
 #endif
 
     // set balance
-    memcpy_b(evm_env_balance, icm_config->contract_balance_after_transfer, 32);
+    dma_read_env(evm_env_balance);
+    memcpy_b(env_reg_buffer, icm_config->contract_balance_after_transfer, 32);
 
     // resume
     cesm_state = CESM_IDLE;
@@ -1017,6 +1019,8 @@ uint8_t icm_decrypt() {
     } else {
       dma_read_env(evm_env_code_size);
       memcpy_b(&code_length, env_reg_buffer, 4);
+      icm_debug("code length", 11);
+      icm_debug(&code_length, 4);
     }
     dma_read_env(evm_env_calldata_size), memcpy_b(&input_length, env_reg_buffer, 4);
     dma_read_env(evm_env_gas), memcpy_b(&gas, env_reg_buffer, 8);
@@ -1086,6 +1090,7 @@ uint8_t icm_decrypt() {
           // the data are encrypted so we have to decrypt again
           aes_decrypt(icm_raw_data_base, req->data, req->length);
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
+          icm_debug(icm_raw_data_base, 0x30);
         }
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
