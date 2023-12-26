@@ -110,10 +110,10 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  OCMStackFrame call_stack[16];
+  OCMStackFrame call_stack[32];
   OCMStackFrame *call_frame_pointer;
 
-  OCMDeployedCodeFrame deployed_codes[16];
+  OCMDeployedCodeFrame deployed_codes[32];
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
 
   ////////////////////////////////////////////
@@ -129,8 +129,9 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  uint8_t icm_ocm_stack_hash[3 * PAGE_SIZE];
+  uint8_t icm_ocm_stack_hash[4 * PAGE_SIZE];
   uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
+  uint8_t icm_ocm_return_has_sign;
 
   ////////////////////////////////////////////
 

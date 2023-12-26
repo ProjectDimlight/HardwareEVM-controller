@@ -4,18 +4,16 @@
 
 #define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
-#define SIGNATURE_LENGTH 56
-#define SIGNATURE_SIZE 64
 #define PAGE_ADDR_W 10
-#define PAGE_SIGN_W 6
+#define PAGE_SIGN_W 5
 #define PAGES(x) (x ? (((x - 1) >> PAGE_ADDR_W) + 1) : 0)
 #define SELF_ADDRESS ((call_frame + 1)->address)
 
 #define call_frame (icm_config->call_frame_pointer)
 #define cesm_state (icm_config->cesm_current_state)
 
-// #define ENCRYPTION
-// #define SIGNATURE
+#define ENCRYPTION
+#define SIGNATURE
 
 // these address spaces are mapped to secure on chip memory
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
@@ -148,6 +146,11 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     call_frame->sign_top = call_frame->memory_sign + sign_length(call_frame->memory_length);
   }
 
+  icm_debug("sign pointers", 13);
+  icm_debug(&(call_frame->stack_sign), 4);
+  icm_debug(&(call_frame->memory_sign), 4);
+  icm_debug(&(call_frame->sign_top), 4);
+
 #ifdef ICM_DEBUG
   icm_debug("pc msize gas load", 17);
 #endif
@@ -249,6 +252,11 @@ void icm_stack_pop() {
 #ifdef ICM_DEBUG
   icm_debug("recover env regs", 16);
 #endif
+
+  icm_debug("sign pointers", 13);
+  icm_debug(&(call_frame->stack_sign), 4);
+  icm_debug(&(call_frame->memory_sign), 4);
+  icm_debug(&(call_frame->sign_top), 4);
 }
 
 // CALL: stack_push, memcpy (last.mem -> this.input), run
@@ -330,6 +338,7 @@ void hash_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(out);
+  icm_debug(out, 32);
 }
 
 int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_t nonce, uint8_t *pub_key) {
@@ -339,6 +348,8 @@ int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
+  icm_debug(in, 32);
+  icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -360,6 +371,8 @@ int hash_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offse
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
+  icm_debug(in, 32);
+  icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -409,6 +422,7 @@ int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offs
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
+  icm_debug(hash, 32);
   return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
 }
 
@@ -475,11 +489,13 @@ void icm_dump_storage() {
     count++; content_length += sizeof(ICMStorageRecord);
     icm_temp_storage->valid[i] = 0;
   }
-  *(uint32_t*)icm_raw_data_base = count;
 #ifdef SIGNATURE
   if (!icm_config->integrity_valid)
     count += 10001;
 #endif
+  *(uint32_t*)icm_raw_data_base = count;
+
+  icm_debug(&count, 4);
   
   res->length = content_length;
 
@@ -656,6 +672,8 @@ void icm_end(uint8_t func) {
   icm_config->immutable_page_type = RETURNDATA;
   icm_config->immutable_page = icm_ram_return_tmp;
   icm_config->immutable_page_sign = icm_config->icm_ocm_return_sign_tmp;
+  icm_config->icm_ocm_return_has_sign = 1;
+
   if (func == OP_RETURN || func == OP_REVERT) {
     icm_config->cesm_ready = 0;
 
@@ -681,17 +699,6 @@ void icm_tmp_test() {
   uint8_t a[16];
   ecdsa_rng(a, 16);
   icm_debug(a, 16);
-  
-  /*
-  uint8_t data[64], sign[64];
-  for (int i = 0; i < 64; i++) {
-    data[i] = i;
-  }
-  ecdsa_sign(sign, data, 64, STACK, 0, icm_config->hevm_priv);
-  int res = ecdsa_verify(sign, data, 64, STACK, 0, icm_config->hevm_pub);
-  icm_debug("test signature verify", 21);
-  icm_debug(&res, 4);
-  */
 }
 
 void icm_step() {
@@ -871,6 +878,8 @@ void icm_call_end_state_machine() {
       icm_config->cesm_ready = 0;
       
       icm_config->check_signature_of_immutable_mem = 0;
+      icm_config->icm_ocm_return_has_sign = 0;
+
       // Copy results to memory
       ECP ecp;
       ecp.opcode = COPY;
@@ -1053,12 +1062,12 @@ void icm_call_end_state_machine() {
     aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * new_stack_size);
     evm_load_stack(1);
 
-#ifdef ICM_DEBUG
     {
       char tmp[100];
       int len = sprintf(tmp, "depth -- -> %d", call_frame - icm_config->call_stack);
       icm_debug(tmp, len);
     }
+#ifdef ICM_DEBUG
 #endif
 
 #ifdef SIGNATURE
@@ -1119,8 +1128,6 @@ uint8_t icm_decrypt() {
     } else if (req->func == ICM_SET_USER_PUB) {
       reset_udp();
       uECC_decompress(req->data, icm_config->user_pub, icm_config->curve);
-
-      icm_debug("here", 4);
 
       ECP *res = get_output_buffer();
       res->opcode = ICM;
@@ -1239,7 +1246,6 @@ uint8_t icm_decrypt() {
       void *base = icm_raw_data_base;
       uint32_t num_of_items = *(uint32_t*)base;
       uint32_t offset = 4;
-      icm_config->count_storage_records ++;
 
       for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
         uint32_t id = icm_find(base + offset);
@@ -1250,7 +1256,10 @@ uint8_t icm_decrypt() {
         }
 
         // OCM need not encryption
-        icm_temp_storage->valid[id] = 1;
+        if (!icm_temp_storage->valid[id]) {
+          icm_temp_storage->valid[id] = 1;
+          icm_config->count_storage_records ++;
+        }
         memcpy(&(icm_temp_storage->record[id].k), base + offset + 0 , 32);
         memcpy(&(icm_temp_storage->record[id].v), base + offset + 32, 32);
         memcpy(&(icm_temp_storage->record[id].v_origin), base + offset + 32, 32);
@@ -1319,9 +1328,10 @@ uint8_t icm_decrypt() {
           memcpy(icm_raw_data_base, req->data, req->length);
           memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
           memcpy(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
-          // [TODO] calculate whole code hash and send back to user
+
           // [TODO] prefetch
         }
+        
         // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
         call_frame->input_mark[mark_offset(req->dest_offset)] = 1;  // mark as valid
@@ -1434,6 +1444,11 @@ uint8_t icm_encrypt(uint32_t length) {
           memcpy(&(icm_temp_storage->record[id].v), base + offset + 32, 32);
           // also, copy the address of the current contract
           memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
+          
+          if (!icm_temp_storage->valid[id]) {
+            icm_temp_storage->valid[id] = 1;
+            icm_config->count_storage_records ++;
+          }
 
 #ifdef ICM_DEBUG
           icm_debug(&(icm_temp_storage->record[id].k), 32);
@@ -1471,7 +1486,11 @@ uint8_t icm_encrypt(uint32_t length) {
 #endif
 
           // OCM need no encryption
-          icm_temp_storage->valid[id] = 1;
+          if (!icm_temp_storage->valid[id]) {
+            icm_temp_storage->valid[id] = 1;
+            icm_config->count_storage_records ++;
+          }
+
           memcpy(&(icm_temp_storage->record[id].k), base, 64);
           // also, copy the address of the current contract
           memcpy(&(icm_temp_storage->record[id].a), call_frame->storage_address, sizeof(address_t));
@@ -1485,12 +1504,12 @@ uint8_t icm_encrypt(uint32_t length) {
         uint32_t id = icm_find(base + 4);
         
 #ifdef ICM_DEBUG
+#endif
         {
           icm_debug("OCM key check", 13);
           icm_debug(base + 4, 32);
           icm_debug(call_frame->storage_address, 20);
         }
-#endif
 
         if (id != storage_prime && icm_temp_storage->valid[id]) {
           // found, do not send output request
@@ -1533,12 +1552,12 @@ uint8_t icm_encrypt(uint32_t length) {
           hash_sign(call_frame->stack_sign, icm_raw_data_base + 4, content_length - 4, STACK, 0, icm_config->hevm_priv);
 #endif
 
-#ifdef DEBUG
           {
             char tmp[100];
             int len = sprintf(tmp, "depth %d -> ++", call_frame - icm_config->call_stack);
             icm_debug(tmp, len);
           }
+#ifdef DEBUG
 #endif
 
           // encrypt stack elements
@@ -1740,7 +1759,11 @@ uint8_t icm_encrypt(uint32_t length) {
               aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
 
 #ifdef SIGNATURE
-              if (!hash_verify_page(target_page_sign + sign_offset(req->dest_offset), icm_raw_data_base, target_page_type, req->dest_offset, 0, icm_config->hevm_pub)) {
+              if (req->src == OCM_IMMUTABLE_MEM && !icm_config->check_signature_of_immutable_mem) {
+                // do not check
+              } else if (target_page_type == RETURNDATA && !icm_config->icm_ocm_return_has_sign) {
+                // do not check
+              } else if (!hash_verify_page(target_page_sign + sign_offset(req->dest_offset), icm_raw_data_base, target_page_type, req->dest_offset, 0, icm_config->hevm_pub)) {
                 icm_debug("page signature verification failed!", 35);
                 icm_debug(&target_page_type, 1);
                 icm_debug(&(req->dest_offset), 4);
