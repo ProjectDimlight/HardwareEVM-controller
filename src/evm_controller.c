@@ -34,6 +34,7 @@ void *memset_b(void *dst0, uint8_t val, uint32_t len0)
 extern void * const icm_raw_data_base;
 volatile void* const evm_base_addr 		  = (void*)0x410000000ll;
 volatile void* const evm_cin_addr  		  = (void*)0x410000000ll;
+volatile char* const evm_cin_core_state = (char*)0x410000004ll;
 volatile void* const evm_cout_addr 		  = (void*)0x410008000ll;
 volatile void* const evm_code_addr     	= (void*)0x410010000ll;
 volatile void* const evm_calldata_addr 	= (void*)0x410020000ll;
@@ -92,7 +93,7 @@ Pending_EVM_Memory_Copy_Request pending_evm_memory_copy_request;
 
 void dma_wait() {
   for(;;) {
-	  if (*(volatile uint32_t*)dma_config_addr & 0x1 == 1)
+	  if ((*(volatile uint32_t*)dma_config_addr & 0x1) == 1)
 		  break;
   }
 }
@@ -266,7 +267,6 @@ uint32_t evm_store_storage() {
       dma_read_storage_slot(i, data + offset);
       numItem++, offset += 16;
     }
-  }
   data[0] = numItem;
   return 64 * numItem + 4;
 }
