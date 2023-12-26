@@ -129,7 +129,6 @@ void dma_read_storage_key(void* dstAddr) {
 void dma_read_stack(uint32_t itemNum, void* dstAddr) {
   if (itemNum == 0) return;
   Xil_DCacheFlush();
-  icm_debug("dma read stack", 14);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
@@ -170,7 +169,6 @@ void dma_write_env(void* env_addr) {
 void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length) {
   if (length == 0) return;
   Xil_DCacheFlush();
-  icm_debug("dma read mem", 12);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
@@ -182,7 +180,6 @@ void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length) {
 void dma_write_mem(void* src_addr, void* dst_addr, uint32_t length) {
   if (length == 0) return;
   Xil_DCacheFlush();
-  icm_debug("dma write mem", 13);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
@@ -200,8 +197,6 @@ void dma_memcpy(void* dst_addr, void* src_addr, uint32_t length) {
     memcpy(dst_addr, src_addr, length);
   } else {
     dma_read_mem(src_addr, icm_raw_data_base, length);
-    icm_debug("dma move", 8);
-    icm_debug(icm_raw_data_base, length);
     dma_write_mem(icm_raw_data_base, dst_addr, length);
   }
 }
@@ -242,8 +237,6 @@ uint32_t evm_store_stack(uint32_t num_of_params) {
     count = num_of_params;
   dma_read_stack(count, data + 1);
   *(uint32_t*)data = count;
-  icm_debug("stack data", 10);
-  icm_debug(data, (count << 5) + 4);
   return (count << 5) + 4;
 }
 
@@ -264,7 +257,6 @@ void evm_load_stack(uint8_t func) {
 
 ///////////////////////////////////////////////////////////////////
 
-
 uint32_t evm_store_storage() {
   uint32_t numItem = 0, offset = 1;
   uint64_t wbMap = *(volatile uint64_t*)evm_storage_wbMap;
@@ -274,9 +266,8 @@ uint32_t evm_store_storage() {
       dma_read_storage_slot(i, data + offset);
       numItem++, offset += 16;
     }
+  }
   data[0] = numItem;
-  icm_debug("storage data", 12);
-  icm_debug(data, 64 * numItem + 4);
   return 64 * numItem + 4;
 }
 
@@ -293,8 +284,6 @@ void evm_load_storage() {
 uint32_t evm_swap_storage(uint32_t index) {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
   uint64_t wbMap = *(uint64_t*)evm_storage_wbMap;
-  icm_debug("wbMap", 5);
-  icm_debug(&wbMap, 8);
   // commit dirty item
   uint32_t offset = 1;
   // copy out if valid & dirty
@@ -313,9 +302,6 @@ uint32_t evm_swap_storage(uint32_t index) {
   dma_read_storage_key(data + offset);
   offset += 8;
 
-  icm_debug("storage data", 12);
-  icm_debug(icm_raw_data_base, offset * 4);
-  
   return offset * 4;
 }
 
@@ -412,7 +398,6 @@ void sync_page_dump(uint8_t dirty, uint8_t src, uint32_t src_offset) {
 
 void evm_memory_copy(ECP *req) {
   if (req) {
-    icm_debug("req memcopy", 11);
     pending_evm_memory_copy_request.ecp = *req;
     if (req->src == RETURNDATA) {
       pending_evm_memory_copy_request.ecp.src = OCM_IMMUTABLE_MEM;
@@ -427,6 +412,7 @@ void evm_memory_copy(ECP *req) {
   uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
+/*
 #ifdef ICM_DEBUG
     uint8_t tmp[32] = {0};
     memcpy_b(tmp     , "step", 4);
@@ -435,7 +421,8 @@ void evm_memory_copy(ECP *req) {
     memcpy_b(tmp + 24, &(req->length), 4);
     icm_debug(tmp, 32);
 #endif
-
+*/
+    
     // before page
     addr_src = data_source_to_address(req->src, req->src_offset);
     addr_dest = data_source_to_address(req->dest, req->dest_offset);
@@ -471,13 +458,6 @@ void evm_memory_copy(ECP *req) {
     }
     
     // copy
-#ifdef ICM_DEBUG
-    icm_debug("memcopy", 7);
-    icm_debug(&addr_dest, 4);
-    icm_debug(&addr_src, 4);
-    icm_debug(&step_length, 4);
-#endif
-    
     dma_memcpy(addr_dest, addr_src, step_length);
     *pte_dest |= 0x3;
 
@@ -518,15 +498,21 @@ void check_debug_buffer() {
   uint32_t *debug_buffer_base = (uint32_t*)0xa0000000;
   uint32_t *data = get_output_buffer() + sizeof(ECP);
   uint16_t target = *debug_counter;
+  uint32_t offset = 0;
 
   for (; local_debug_counter != target; local_debug_counter++) {
     // gas8, pc4, stacksize4, gap16, res32
-    for (int i = 0; i < 16; i++)
-      data[i] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
-
-    memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
-    icm_encrypt(sizeof(ECP) + 64);
+    for (int i = 0; i < 16; i++, offset++)
+      data[offset] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
   }
+
+  if (offset == 0)
+    return;
+
+  // send multiple debug data at a time
+  memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+  ((ECP*)get_output_buffer())->length = (offset << 2);
+  icm_encrypt(sizeof(ECP) + (offset << 2));
 }
 
 void clear_debug_buffer() {
@@ -539,13 +525,15 @@ uint8_t evm_has_output() {
   return evm_active && p->opcode != NONE;
 }
 
+uint8_t wait_for_query = 0;
+
 void handle_ecp(ECP *in) {
   ECP header;
   memcpy_b(&header, in, 16);
   ECP *req = &header;
   in->opcode = 0;
   
-  uint8_t ready = 0, wait_for_query = 0;
+  uint8_t ready = 0;
   
   check_debug_buffer();
 
@@ -647,7 +635,6 @@ void handle_ecp(ECP *in) {
     else { // swap memory
 #ifdef ICM_DEBUG
       icm_debug("swap page", 9);
-      icm_debug(req, 16);
 #endif
       if (req->func) { // has dirty page to send back
         dma_memcpy(icm_raw_data_base, data_source_to_address(req->src, req->src_offset), req->length);
@@ -661,6 +648,7 @@ void handle_ecp(ECP *in) {
 #endif
       ready = icm_encrypt(sizeof(ECP) + content_length);
       if (ready) {
+        // icm_debug("found locally, load to FPGA", 27);
         evm_load_memlike(req->src, req->dest_offset);
       }
     }
@@ -672,7 +660,6 @@ void handle_ecp(ECP *in) {
   else if (req->opcode == END) {
     // before actually ending the run
     // print all traces
-    check_debug_buffer();
     evm_active = 0;
 
 #ifdef ICM_DEBUG
@@ -730,7 +717,6 @@ void handle_ecp(ECP *in) {
 
     // before actually ending the run
     // print all traces
-    check_debug_buffer();
     evm_active = 0;
 
 #ifdef ICM_DEBUG
@@ -826,7 +812,7 @@ void handle_ecp(ECP *in) {
   }
   else if (req->opcode == DEBUG) {
 #ifdef ICM_DEBUG
-  icm_debug("debug triggered", 15);
+    icm_debug("debug triggered", 15);
 #endif
     ready = 1;
   }
@@ -834,11 +820,15 @@ void handle_ecp(ECP *in) {
   // resume execution                  | only when the evm_memory_copy is finished  
   if ((req->dest != HOST && !wait_for_query && !pending_evm_memory_copy_request.valid) || ready) {
     // does not continue if exception from evm not yet handled
-    if (evm_has_output())
-      return;
-   *(char*)(evm_cin_addr + 4) = evm_active;
+    if (evm_has_output()) {
 #ifdef ICM_DEBUG
-  icm_debug("cont", 4);
+      icm_debug("ecp pending", 11);
+#endif
+      return;
+    }
+    *evm_cin_core_state = evm_active;
+#ifdef ICM_DEBUG
+    icm_debug("cont", 4);
 #endif
   }
 }

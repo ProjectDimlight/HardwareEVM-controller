@@ -4,7 +4,7 @@
 #include "evm_controller.h"
 #include "aes.h"
 #include "keccak.h"
-// #include "uECC.h"
+#include "uECC.h"
 // #include "xsecure.h"
 
 #define ICM_DEBUG
@@ -14,12 +14,15 @@ typedef uint8_t address_t[20];
 typedef uint8_t *address_p;
 typedef uint8_t rsa2048_t[256];
 typedef uint8_t aes128_t[16];
+typedef uint8_t ecc224_priv_t[28];
+typedef uint8_t ecc224_pub_t[56];
 
 enum ICMFunc{
   ICM_FINISH = 0,
   ICM_CLEAR_STORAGE = 1,
   ICM_SET_USER_PUB, 
   ICM_SET_CONTRACT,
+  ICM_ACK
 };
 
 enum CESMStates{
@@ -61,17 +64,19 @@ typedef struct __OCMStackFrame{
 
   // RAM pointers
   OCMDeployedCodeFrame *locally_deployed_contract_code;
-  uint8_t *code, *code_sign;
-  uint8_t *input, *input_sign;
+  uint8_t *code, *code_sign, *code_mark;
+  uint8_t *input, *input_sign, *input_mark;
   uint8_t *stack, *stack_sign;
   uint8_t *memory, *memory_sign;
-  uint8_t *top;
+  uint8_t *top, *sign_top;
 } OCMStackFrame;
 
 typedef struct {
+  uint8_t buffer[PAGE_SIZE];
   uint8_t ocm_mem_page[PAGE_SIZE];
   uint8_t ocm_immutable_page[PAGE_SIZE];
   uint32_t ocm_mem_pte, ocm_immutable_pte;
+  uint8_t immutable_page_type;
   uint8_t *immutable_page;
   uint8_t *immutable_page_sign;
   uint32_t immutable_page_length;
@@ -79,8 +84,8 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  uint256_t block_hash;
-  uint8_t stack_integrity_valid;
+  uint8_t integrity_valid;
+  uint8_t check_signature_of_immutable_mem;
 
   ////////////////////////////////////////////
 
@@ -89,10 +94,13 @@ typedef struct {
   ////////////////////////////////////////////
 
   struct AES_ctx aes_inst;
+
+  uint32_t rng_rec[32];
   
-  // uECC_Curve curve;
-  uint8_t hevm_pub[32], hevm_priv[32]; 
-  uint8_t user_pub[32];
+  uECC_Curve curve;
+  uint8_t curve_succeed;
+  uint8_t hevm_pub[64], hevm_priv[64];
+  uint8_t user_pub[64];
   uint8_t zero[64];
 
   // keccak space
@@ -102,11 +110,13 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  OCMStackFrame call_stack[16];
+  OCMStackFrame call_stack[32];
   OCMStackFrame *call_frame_pointer;
 
-  OCMDeployedCodeFrame deployed_codes[16];
+  OCMDeployedCodeFrame deployed_codes[32];
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
+
+  ////////////////////////////////////////////
 
   address_p contract_address_waiting_for_size;
   uint256_t contract_balance_after_transfer;
@@ -117,18 +127,29 @@ typedef struct {
   uint32_t cesm_current_state;
   uint8_t  cesm_ready;
 
+  ////////////////////////////////////////////
+
+  uint8_t icm_ocm_stack_hash[4 * PAGE_SIZE];
+  uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
+  uint8_t icm_ocm_return_has_sign;
+
+  ////////////////////////////////////////////
+
+  uint32_t count_storage_records;
+
 } ICMConfig;
 
 typedef struct {
   uint256_t k;
   uint256_t v;
+  uint256_t v_origin;
   address_t a;
 } ICMStorageRecord;
 
-#define storage_record_size 85
-#define storage_record_count 771
-#define storage_padding 1
-#define storage_prime 769
+#define storage_record_size 117
+#define storage_record_count 280
+#define storage_padding 8
+#define storage_prime 277
 
 typedef struct {
   ICMStorageRecord  record[storage_record_count];
@@ -168,3 +189,5 @@ uint8_t icm_decrypt();
 // the length should be the entire length (with the ECP header)
 // returns 1 if icm solves the request and can resume, 0 if the request is passed to HOST
 uint8_t icm_encrypt(uint32_t length);
+
+void reset_udp();

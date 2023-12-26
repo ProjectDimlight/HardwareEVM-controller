@@ -35,10 +35,12 @@ void led_and_heart_beat() {
       *led_ptr = led_on;
     }
   } else {
-    *led_ptr = (fail ? 0xa : (*(char*)0x410000004 ? 0xf : 0x0));
+    *led_ptr = (fail ? 0xa : (*evm_cin_core_state ? 0xf : 0x0));
 #ifdef ICM_DEBUG
+    // there are still heart beats after stuck
+    // so it is a hardware issue
     if (cnt == 0) {
-      // icm_debug("heart beat", 10);
+      //icm_debug("heart beat", 10);
     }
 #endif
   }

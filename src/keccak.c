@@ -172,7 +172,7 @@ void keccak_256_update(uint8_t* M, int l) {
 }
 
 void keccak_256_finalize(uint8_t* O) {
-  memset(icm_config->keccak_buf + icm_config->keccak_len, 0, 1088 / 8 - icm_config->keccak_len);
+  memset(icm_config->keccak_buf + icm_config->keccak_len, 0, sizeof(icm_config->keccak_buf)- icm_config->keccak_len);
   icm_config->keccak_buf[icm_config->keccak_len] = 0x01;
   icm_config->keccak_buf[1088 / 8 - 1] |= 0x80;
   keccak_256_buffer_update();

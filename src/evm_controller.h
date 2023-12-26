@@ -7,15 +7,15 @@
 #define PAGE_SIZE 1024
 #define NUMBER_OF_PAGES 4
 
-extern volatile void* const evm_base_addr;
-extern volatile void* const evm_cin_addr;
-extern volatile void* const evm_cout_addr;
-extern volatile void* const evm_code_addr;
-extern volatile void* const evm_calldata_addr;
-extern volatile void* const evm_mem_addr;
-extern volatile void* const evm_storage_addr;
-extern volatile void* const evm_env_addr;
-extern volatile void* const evm_stack_addr;
+extern volatile void* const evm_base_addr 		  ;
+extern volatile void* const evm_cin_addr  		  ;
+extern volatile void* const evm_cout_addr 		  ;
+extern volatile void* const evm_code_addr     	;
+extern volatile void* const evm_calldata_addr 	;
+extern volatile void* const evm_mem_addr 		    ;
+extern volatile void* const evm_storage_addr    ;
+extern volatile void* const evm_env_addr 		    ;
+extern volatile void* const evm_stack_addr      ;
 
 extern volatile void* const evm_env_stack_size;
 extern volatile void* const evm_env_pc;
