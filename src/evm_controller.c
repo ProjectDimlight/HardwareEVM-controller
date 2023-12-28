@@ -55,17 +55,6 @@ volatile void* const evm_storage_reset   = (void*)0x410043000ll;
 volatile void* const evm_stack_flush     = (void*)0x410068000ll;
 volatile void* const evm_stack_counter   = (void*)0x410064000ll;
 
-volatile void* const evm_env_pc               = evm_env_addr + 0x0f * 32;
-volatile void* const evm_env_gas              = evm_env_addr + 0x0a * 32;
-volatile void* const evm_env_msize            = evm_env_addr + 0x09 * 32;
-volatile void* const evm_env_value            = evm_env_addr + 0x14 * 32;
-volatile void* const evm_env_balance          = evm_env_addr + 0x07 * 32;
-volatile void* const evm_env_code_size        = evm_env_addr + 0x18 * 32;
-volatile void* const evm_env_calldata_size    = evm_env_addr + 0x16 * 32;
-volatile void* const evm_env_returndata_size  = evm_env_addr + 0x1d * 32;
-volatile void* const evm_env_address          = evm_env_addr + 0x10 * 32;
-volatile void* const evm_env_caller           = evm_env_addr + 0x13 * 32;
-
 const uint64_t pt_offset 		    = 0x8000;
 const uint64_t page_tag_mask	  = ~0xfff;
 const uint64_t page_tagid_mask	= ~0x3ff;
@@ -78,7 +67,6 @@ const uint32_t num_of_call_params[] = {3, 7, 7, 0, 6, 4, 0, 0, 0, 0, 6};
 const uint32_t num_of_end_params[]  = {0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1};
 
 int evm_active = 0;
-uint32_t env_reg_buffer[8];
 
 typedef struct {
   // memcpy_progress
@@ -144,25 +132,6 @@ void dma_write_stack(uint32_t itemNum, void* srcAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
-  *(uint32_t*)dma_config_addr = 0x2;
-  dma_wait();
-}
-
-void dma_read_env(void* env_addr) {
-  Xil_DCacheFlush();
-  *(uint32_t*)dma_srcAddr_addr = (uint32_t)env_addr;
-  *(uint32_t*)dma_destAddr_addr = (uint32_t)&env_reg_buffer;
-  *(uint32_t*)dma_length_addr = 1 << 5;
-  *(uint32_t*)dma_config_addr = 0x0;
-  dma_wait();
-  Xil_DCacheFlush();
-}
-
-void dma_write_env(void* env_addr) {
-  Xil_DCacheFlush();
-  *(uint32_t*)dma_srcAddr_addr = (uint32_t)&env_reg_buffer;
-  *(uint32_t*)dma_destAddr_addr = (uint32_t)env_addr;
-  *(uint32_t*)dma_length_addr = 1 << 5;
   *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
@@ -328,7 +297,6 @@ void evm_dump_memory() {
     buf->dest_offset = 0;
     buf->length = PAGE_SIZE;
     dma_read_mem(memory + (i << 10), icm_raw_data_base, PAGE_SIZE);
-    icm_debug(icm_raw_data_base, 0x40);
     icm_encrypt(sizeof(ECP) + buf->length);
     // clear mem cache
     *data_source_to_pte(MEM, i << 10) = 0;

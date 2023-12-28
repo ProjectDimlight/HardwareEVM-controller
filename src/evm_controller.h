@@ -17,18 +17,7 @@ extern volatile void* const evm_mem_addr 		    ;
 extern volatile void* const evm_storage_addr    ;
 extern volatile void* const evm_env_addr 		    ;
 extern volatile void* const evm_stack_addr      ;
-
-extern volatile void* const evm_env_stack_size;
-extern volatile void* const evm_env_pc;
-extern volatile void* const evm_env_gas;
-extern volatile void* const evm_env_msize;
-extern volatile void* const evm_env_value;
-extern volatile void* const evm_env_balance;
-extern volatile void* const evm_env_code_size;
-extern volatile void* const evm_env_calldata_size;
-extern volatile void* const evm_env_returndata_size;
-extern volatile void* const evm_env_address;
-extern volatile void* const evm_env_caller;
+extern volatile void* const evm_env_stack_size  ;
 
 extern const uint64_t pt_offset 		  ;
 extern const uint64_t page_tag_mask	  ;
@@ -110,8 +99,8 @@ void check_debug_buffer();
 void *memcpy_b(void *dst0, void *src0, uint32_t len0);
 void *memset_b(void *dst0, uint8_t val, uint32_t len0);
 
-void dma_read_env(void* env_addr);
-void dma_write_env(void* env_addr);
+void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length);
+void dma_write_mem(void* src_addr, void* dst_addr, uint32_t length);
 void dma_memcpy(void* dst_addr, void* src_addr, uint32_t length);
 
 #endif
