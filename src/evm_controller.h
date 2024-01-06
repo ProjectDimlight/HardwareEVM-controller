@@ -9,7 +9,7 @@
 
 extern volatile void* const evm_base_addr 		  ;
 extern volatile void* const evm_cin_addr  		  ;
-volatile char* const evm_cin_core_state         ;
+extern volatile char* const evm_cin_core_state  ;
 extern volatile void* const evm_cout_addr 		  ;
 extern volatile void* const evm_code_addr     	;
 extern volatile void* const evm_calldata_addr 	;

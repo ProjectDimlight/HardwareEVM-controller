@@ -753,7 +753,8 @@ void icm_call_end_state_machine() {
       callee_storage_address = (func == OP_DELEGATECALL ? call_frame->storage_address : SELF_ADDRESS);
       callee_caller_address = (func == OP_DELEGATECALL ? call_frame->caller_address : call_frame->storage_address);
       if (func == OP_DELEGATECALL) {
-        value = evm_env_value;
+        dma_read_mem(evm_env_addr + 7 * 32, icm_raw_data_base, 32);
+        memcpy(value, icm_raw_data_base, 32);
       } else {
         value = icm_config->zero;
       }
@@ -1063,8 +1064,8 @@ void icm_call_end_state_machine() {
     icm_config->check_signature_of_immutable_mem = 1;
 
     // Copy back EVM stack
-    uint32_t new_stack_size = call_frame->stack_size - call_frame->num_of_params;
-    *(uint32_t*)icm_raw_data_base = new_stack_size + 1;
+    uint32_t new_stack_size = call_frame->stack_size - call_frame->num_of_params + 1;
+    *(uint32_t*)icm_raw_data_base = new_stack_size;
     if (call_frame->call_end_func == OP_CREATE || call_frame->call_end_func == OP_CREATE2) {
       memset(icm_raw_data_base + 4 + 20, 0, 12);
       memcpy(icm_raw_data_base + 4, icm_config->deployed_codes_pointer->address, 20);
@@ -1089,7 +1090,7 @@ void icm_call_end_state_machine() {
 #endif
 
 #ifdef SIGNATURE
-    if (!hash_verify(call_frame->stack_sign, icm_raw_data_base + 4 + 32, 32 * new_stack_size, STACK, 0, icm_config->hevm_pub)) {
+    if (!hash_verify(call_frame->stack_sign, icm_raw_data_base + 4 + 32, 32 * (new_stack_size - 1), STACK, 0, icm_config->hevm_pub)) {
       icm_debug("stack signature verification failed!", 36);
       icm_config->integrity_valid = 0;
     }
@@ -1120,7 +1121,7 @@ void icm_call_end_state_machine() {
 #endif
 
     // set balance
-    dma_read_mem(evm_env_addr + 8 * 32, icm_raw_data_base, 32);
+    dma_read_mem(evm_env_addr + 9 * 32, icm_raw_data_base, 32);
     memcpy(icm_raw_data_base, icm_config->contract_balance_after_transfer, 32);
 
     // resume
@@ -1199,8 +1200,8 @@ uint8_t icm_decrypt() {
 
     // check passed
     call_frame = icm_config->call_stack;
-    dma_read_mem(evm_env_addr + 3 * 32, icm_raw_data_base, 32 * 5);
-    memcpy(call_frame->address, icm_raw_data_base, sizeof(address_t));
+    dma_read_mem(evm_env_addr + 2 * 32, icm_raw_data_base, 32 * 6);
+    memcpy(call_frame->address, icm_raw_data_base + 32, sizeof(address_t));
     
     call_frame->storage_address = call_frame->address;
     call_frame->caller_address = icm_config->zero;
@@ -1215,16 +1216,16 @@ uint8_t icm_decrypt() {
     uint64_t gas;
     uint256_t value;
 
-    memcpy(address, icm_raw_data_base + 32, sizeof(address_t));
+    memcpy(address, icm_raw_data_base + 32 * 2, sizeof(address_t));
     icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address);
     if (icm_config->found_deployed_code) {
       code_length = icm_config->found_deployed_code->length;
     } else {
-      code_length = *((uint32_t*)(icm_raw_data_base + 32));
+      code_length = *((uint32_t*)(icm_raw_data_base + 32 * 3));
     }
-    input_length = *((uint32_t*)(icm_raw_data_base + 32 * 2));
-    gas = *((uint64_t*)(icm_raw_data_base + 32 * 3));
-    value = *((uint256_t*)(icm_raw_data_base + 32 * 4));
+    input_length = *((uint32_t*)(icm_raw_data_base + 32 * 4));
+    gas = *((uint64_t*)(icm_raw_data_base));
+    memcpy(value, icm_raw_data_base + 32 * 5, 32);
 
 #ifdef ICM_DEBUG
     icm_debug(address, 20);
@@ -1646,7 +1647,11 @@ uint8_t icm_encrypt(uint32_t length) {
             uint8_t zero[PAGE_SIZE];
             uint8_t init = 0;
             for (; target_frame->memory_length < req->src_offset; target_frame->memory_length += PAGE_SIZE) {
+#ifdef ENCRYPTION
               memcpy(target_page + target_frame->memory_length, zero_page, PAGE_SIZE);
+#else         
+              memcpy(target_page + target_frame->memory_length, zero, PAGE_SIZE);
+#endif
 #ifdef SIGNATURE
               if (!init) {
                 init = 1;
