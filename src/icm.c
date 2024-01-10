@@ -155,12 +155,11 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     call_frame->sign_top = call_frame->memory_sign + sign_length(call_frame->memory_length);
   }
 
+#ifdef ICM_DEBUG
   icm_debug("sign pointers", 13);
   icm_debug(&(call_frame->stack_sign), 4);
   icm_debug(&(call_frame->memory_sign), 4);
   icm_debug(&(call_frame->sign_top), 4);
-
-#ifdef ICM_DEBUG
   icm_debug("pc msize gas load", 17);
 #endif
   
@@ -263,12 +262,11 @@ void icm_stack_pop() {
 
 #ifdef ICM_DEBUG
   icm_debug("recover env regs", 16);
-#endif
-
   icm_debug("sign pointers", 13);
   icm_debug(&(call_frame->stack_sign), 4);
   icm_debug(&(call_frame->memory_sign), 4);
   icm_debug(&(call_frame->sign_top), 4);
+#endif
 }
 
 // CALL: stack_push, memcpy (last.mem -> this.input), run
@@ -347,7 +345,6 @@ void hash_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(out);
-  icm_debug(out, 32);
 }
 
 int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_t nonce, uint8_t *pub_key) {
@@ -357,8 +354,6 @@ int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(in, 32);
-  icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -380,8 +375,6 @@ int hash_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offse
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(in, 32);
-  icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -394,9 +387,6 @@ int ecdsa_rng(uint8_t *dest, unsigned size) {
     }
     dest[t] = val;
   }
-  // icm_debug("rng", 3);
-  // icm_debug(&size, 4);
-  // icm_debug(dest, size);
   return 1;
 }
 
@@ -407,8 +397,6 @@ void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t src, uint64_
   keccak_256_update(&src, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(hash, 32);
-  // icm_debug(data, size);
   uint8_t res = uECC_sign(priv_key, hash, 32, out, icm_config->curve);
 }
 
@@ -431,7 +419,6 @@ int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offs
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(hash, 32);
   return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
 }
 
@@ -503,9 +490,6 @@ void icm_dump_storage() {
     count += 10001;
 #endif
   *(uint32_t*)icm_raw_data_base = count;
-
-  icm_debug(&count, 4);
-  
   res->length = content_length;
 
 #ifdef ENCRYPTION
@@ -1075,18 +1059,20 @@ void icm_call_end_state_machine() {
       *(uint8_t*)(icm_raw_data_base + 4) = (call_frame + 1)->call_end_func != OP_REVERT;
     }
     aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * (new_stack_size - 1));
+#ifdef ICM_DEBUG
     icm_debug("recover stack", 13);
     icm_debug(&call_frame->stack_size, 4);
     icm_debug(&new_stack_size, 4);
     icm_debug(icm_raw_data_base + 4, new_stack_size * 32);
+#endif
     evm_load_stack(1);
 
+#ifdef ICM_DEBUG
     {
       char tmp[100];
       int len = sprintf(tmp, "depth -- -> %d", call_frame - icm_config->call_stack);
       icm_debug(tmp, len);
     }
-#ifdef ICM_DEBUG
 #endif
 
 #ifdef SIGNATURE
@@ -1141,8 +1127,9 @@ void icm_call_end_state_machine() {
 
 uint8_t icm_decrypt() {
   ECP *req = get_input_buffer() + 4;
-
+#ifdef ICM_DEBUG
   icm_debug(req, 16);
+#endif
 
   if (req->opcode == ICM) {
     if (req->func == ICM_CLEAR_STORAGE) {
@@ -1417,7 +1404,7 @@ uint8_t icm_encrypt(uint32_t length) {
   } else if (req->opcode == QUERY) {
     OCMDeployedCodeFrame *p = icm_find_locally_deployed_contract_code(icm_raw_data_base);
     if (p) {
-      if (req->func == 0x1b) {
+      if (req->func == ExtCodeSize) {    // ExtCodeSize
         memcpy(icm_raw_data_base, &(p->length), 4);
         memset(icm_raw_data_base + 4, 0, sizeof(uint256_t) - 4);
 #ifdef ICM_DEBUG
@@ -1426,7 +1413,7 @@ uint8_t icm_encrypt(uint32_t length) {
 #endif
         return 1;
       }
-      else if (req->func == 0x1f) {
+      else if (req->func == ExtCodeHash) { // ExtCodeHash
         memcpy(icm_raw_data_base, p->code_hash, 32);
 #ifdef ICM_DEBUG
         icm_debug("found locally", 13);
@@ -1527,12 +1514,12 @@ uint8_t icm_encrypt(uint32_t length) {
         uint32_t id = icm_find(base + 4);
         
 #ifdef ICM_DEBUG
-#endif
         {
           icm_debug("OCM key check", 13);
           icm_debug(base + 4, 32);
           icm_debug(call_frame->storage_address, 20);
         }
+#endif
 
         if (id != storage_prime && icm_temp_storage->valid[id]) {
           // found, do not send output request
@@ -1575,12 +1562,12 @@ uint8_t icm_encrypt(uint32_t length) {
           hash_sign(call_frame->stack_sign, icm_raw_data_base + 4, content_length - 4, STACK, 0, icm_config->hevm_priv);
 #endif
 
+#ifdef DEBUG
           {
             char tmp[100];
             int len = sprintf(tmp, "depth %d -> ++", call_frame - icm_config->call_stack);
             icm_debug(tmp, len);
           }
-#ifdef DEBUG
 #endif
 
           // encrypt stack elements
@@ -1754,8 +1741,6 @@ uint8_t icm_encrypt(uint32_t length) {
                 memcpy(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
               }
             } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
-#ifdef ICM_DEBUG
-#endif             
               aes_decrypt(icm_raw_data_base, icm_config->call_frame_pointer->locally_deployed_contract_code->code + req->dest_offset, PAGE_SIZE);
             } else {
 #ifdef ICM_DEBUG

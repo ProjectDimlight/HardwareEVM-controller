@@ -81,8 +81,9 @@ void reset_udp() {
 	}
 	expected_reply_id = 0;
 	request_id = 0;
-
+#ifdef ICM_DEBUG
 	icm_debug("reset udp", 9);
+#endif
 }
 
 void retry_send() {

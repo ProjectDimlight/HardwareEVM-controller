@@ -75,6 +75,14 @@ enum DataSource {
   OCM_IMMUTABLE_MEM
 };
 
+enum EnvOperation {
+  Balance = 0x14,
+  ExtCodeSize = 0x18,
+  ExtCodeCopy = 0x19,
+  ExtCodeHash = 0x1b,
+  BlockHash = 0x1c
+};
+
 typedef struct {
   uint8_t opcode;
   uint8_t src;

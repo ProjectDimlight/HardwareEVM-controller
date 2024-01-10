@@ -245,7 +245,7 @@ void evm_load_storage() {
   uint32_t* data = (uint32_t*)icm_raw_data_base;
   uint32_t numItem = data[0], offset = 1;
   for (int i = 0; i < numItem; i++, offset += 16) {
-    uint32_t index = data[offset + 7] & 0x3f;
+    uint32_t index = data[offset] & 0x3f;
     dma_write_storage_slot(index, data + offset);
   }
 }
@@ -283,10 +283,8 @@ void evm_clear_storage() {
 void evm_dump_memory() {
   ECP *buf = get_output_buffer();
   uint8_t *memory = (uint8_t*)evm_mem_addr;
-  icm_debug("dump memory start", 17);
   for (int i = 0; i < NUMBER_OF_PAGES; i++) {
     uint32_t pte = *data_source_to_pte(MEM, i << 10);
-    icm_debug(&pte, 4);
     if ((pte & 2) == 0)  // empty
       continue;
     memset(buf, 0, sizeof(ECP));
@@ -380,17 +378,6 @@ void evm_memory_copy(ECP *req) {
   uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
-/*
-#ifdef ICM_DEBUG
-    uint8_t tmp[32] = {0};
-    memcpy_b(tmp     , "step", 4);
-    memcpy_b(tmp + 8 , &(req->src_offset), 4);
-    memcpy_b(tmp + 16, &(req->dest_offset), 4);
-    memcpy_b(tmp + 24, &(req->length), 4);
-    icm_debug(tmp, 32);
-#endif
-*/
-    
     // before page
     addr_src = data_source_to_address(req->src, req->src_offset);
     addr_dest = data_source_to_address(req->dest, req->dest_offset);
@@ -456,7 +443,7 @@ void evm_memory_copy(ECP *req) {
 }
 
 uint16_t local_debug_counter = 0;
-uint8_t local_debug_enable = 0;
+uint8_t local_debug_enable = 1;
 uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
 
 void check_debug_buffer() {
@@ -755,10 +742,9 @@ void handle_ecp(ECP *in) {
     content_length = 32;
     dma_read_stack(1, icm_raw_data_base);
     memcpy_b(get_output_buffer(), req, sizeof(ECP));
-    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
-    *stackOp = 0;  // pop the address
-    if (req->func == 0x1c) { // ext code copy
-      *stackOp = 0; *stackOp = 0; *stackOp = 0;
+  
+    if (req->func == ExtCodeCopy) { // ExtCodeCopy
+      dma_read_stack(3, icm_raw_data_base + 32);
       evm_dump_memory();
     }
 
@@ -772,10 +758,7 @@ void handle_ecp(ECP *in) {
   }
   else if (req->opcode == LOG) {
     // [TODO] send the stack contents to host as log
-    volatile uint8_t* stackOp = (uint8_t*)(evm_stack_addr + 0x8024);
-    for (int i = 0; i < req->func; i++)
-      *stackOp = 0;
-
+    dma_read_stack(req->func, icm_raw_data_base);
     ready = 1;
   }
   else if (req->opcode == DEBUG) {
