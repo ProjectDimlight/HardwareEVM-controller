@@ -2,6 +2,7 @@
 #include "evm_controller.h"
 #include "sim_ram.h"
 #include "icm.h"
+#include "xil_cache.h"
 
 void *memcpy_b(void *dst0, void *src0, uint32_t len0)
 {
@@ -258,8 +259,6 @@ uint32_t evm_swap_storage(uint32_t index) {
   // copy out if valid & dirty
   if (wbMap & (1ll << index)) {
     data[0] = 1;
-    // copy out to OCM if valid for better performance
-    // regardless of whether it is dirty
     dma_read_storage_slot(index, data + offset);
     offset += 16;
   } else {

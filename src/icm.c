@@ -140,7 +140,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     call_frame->pc = *(uint32_t*)icm_raw_data_base;
     call_frame->msize = *((uint32_t*)(icm_raw_data_base + 32));
     call_frame->gas = *((uint64_t*)(icm_raw_data_base + 64));
-    call_frame->pc ++;  // step to the next inst
+    call_frame->pc++;
 #ifdef ICM_DEBUG
     icm_debug("env read", 8);
     icm_debug(&call_frame->pc, 4);
@@ -258,6 +258,7 @@ void icm_stack_pop() {
     *((uint32_t*)(icm_raw_data_base + 32 * 6)) = call_frame->input_length;
     memcpy(icm_raw_data_base + 32 * 7, call_frame->value, sizeof(uint256_t));
     *((uint32_t*)(icm_raw_data_base + 32 * 8)) = call_frame->return_length;
+    dma_write_mem(icm_raw_data_base, evm_env_addr, 32 * 9);
   }
 
 #ifdef ICM_DEBUG
@@ -781,9 +782,8 @@ void icm_call_end_state_machine() {
       icm_config->immutable_page_sign = base + page_length(input_length);
       icm_config->immutable_page_length = input_length;
 
-      memset(icm_raw_data_base, 0, 32);
-      *(uint32_t*)icm_raw_data_base = call_frame->pc;
-      dma_write_mem(evm_env_addr, icm_raw_data_base, 32);
+      dma_read_mem(evm_env_addr, icm_raw_data_base, 32);
+      call_frame->pc = *(uint32_t*)icm_raw_data_base;
       call_frame->pc++;
 
       cesm_state = CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY;
@@ -1065,7 +1065,6 @@ void icm_call_end_state_machine() {
     icm_debug(&new_stack_size, 4);
     icm_debug(icm_raw_data_base + 4, new_stack_size * 32);
 #endif
-    evm_load_stack(1);
 
 #ifdef ICM_DEBUG
     {
@@ -1081,11 +1080,14 @@ void icm_call_end_state_machine() {
       icm_config->integrity_valid = 0;
     }
 #endif
+    // Function evm_load_stack() will reorder stack data, since push should from bottom data. Here we need to verify
+    //  stack data first, and then load them back to hardware.
+    evm_load_stack(1);
 
     if (icm_config->calling_precompiled) {
       memset(icm_raw_data_base, 0, 32);
       *(uint32_t*)icm_raw_data_base = call_frame->pc;
-      dma_write_mem(evm_env_addr, icm_raw_data_base, 32);
+      dma_write_mem(icm_raw_data_base, evm_env_addr, 32);
       icm_config->calling_precompiled = 0;
     }
 
