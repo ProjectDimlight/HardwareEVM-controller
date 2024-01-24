@@ -45,9 +45,11 @@ uint32_t icm_hash(address_t address, uint256_t key) {
   uint32_t ad = *(uint32_t*)(address + 0);
   uint32_t hi = *(uint32_t*)(key + 28);
   uint32_t lo = *(uint32_t*)(key + 0);
-  uint32_t hash = (ad % storage_prime);
-  hash = (hash * 31 + hi) % storage_prime;
-  hash = (hash * 17 + lo) % storage_prime;
+  uint32_t hash = ad;
+  hash = (hash << 5) - hash + hi;
+  hash = (hash << 4) + hash + lo;
+  hash = hash & (storage_pow2);
+  while (hash >= storage_prime) hash -= storage_prime;
   return hash;
 }
 
@@ -63,7 +65,7 @@ uint32_t icm_find(uint256_t key) {
       icm_temp_storage->valid[hash] && (
       memcmp(icm_temp_storage->record[hash].a, call_frame->storage_address, sizeof(address_t)) != 0 ||
       memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
-    hash = (hash + 1) % storage_prime, cnt++);
+    hash = ((hash == (storage_prime - 1)) ? 0 : (hash + 1)), cnt++);
 
   if (cnt == storage_prime) 
     return storage_prime;
@@ -338,7 +340,7 @@ void hash_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(out);
-  icm_debug(out, 32);
+  // icm_debug(out, 32);
 }
 
 int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_t nonce, uint8_t *pub_key) {
@@ -348,8 +350,8 @@ int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(in, 32);
-  icm_debug(hash, 32);
+  // icm_debug(in, 32);
+  // icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -371,8 +373,8 @@ int hash_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offse
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(in, 32);
-  icm_debug(hash, 32);
+  // icm_debug(in, 32);
+  // icm_debug(hash, 32);
   return memcmp(in, hash, 32) == 0;
 }
 
@@ -398,7 +400,7 @@ void ecdsa_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t src, uint64_
   keccak_256_update(&src, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(hash, 32);
+  // icm_debug(hash, 32);
   // icm_debug(data, size);
   uint8_t res = uECC_sign(priv_key, hash, 32, out, icm_config->curve);
 }
@@ -422,7 +424,7 @@ int ecdsa_verify_page(uint8_t *in, uint8_t *data, uint8_t src, uint32_t src_offs
   keccak_256_update(&src_offset, 4);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
-  icm_debug(hash, 32);
+  // icm_debug(hash, 32);
   return uECC_verify(pub_key, hash, 32, in, icm_config->curve);
 }
 
@@ -1253,6 +1255,7 @@ uint8_t icm_decrypt() {
         if (id == storage_prime) {
           icm_dump_storage();
           id = icm_find(base + offset);
+          icm_debug("alive", 5);
         }
 
         // OCM need not encryption
@@ -1437,6 +1440,7 @@ uint8_t icm_encrypt(uint32_t length) {
           if (id == storage_prime) {
             icm_dump_storage();
             id = icm_find(base + offset);
+            icm_debug("alive", 5);
           }
 
           // OCM need not encryption
@@ -1475,6 +1479,7 @@ uint8_t icm_encrypt(uint32_t length) {
             memcpy(get_output_buffer(), head, 16);
 
             id = icm_find(base);
+            icm_debug("alive", 5);
           }
           
 #ifdef ICM_DEBUG
@@ -1504,12 +1509,12 @@ uint8_t icm_encrypt(uint32_t length) {
         uint32_t id = icm_find(base + 4);
         
 #ifdef ICM_DEBUG
-#endif
         {
           icm_debug("OCM key check", 13);
           icm_debug(base + 4, 32);
           icm_debug(call_frame->storage_address, 20);
         }
+#endif
 
         if (id != storage_prime && icm_temp_storage->valid[id]) {
           // found, do not send output request

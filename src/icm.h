@@ -150,6 +150,7 @@ typedef struct {
 #define storage_record_count 280
 #define storage_padding 8
 #define storage_prime 277
+#define storage_pow2 511
 
 typedef struct {
   ICMStorageRecord  record[storage_record_count];
