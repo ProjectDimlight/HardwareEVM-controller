@@ -148,13 +148,15 @@ typedef struct {
 
 #define storage_record_size 117
 #define storage_record_count 280
-#define storage_padding 8
+#define storage_padding1 4
+#define storage_padding2 4
 #define storage_prime 277
 #define storage_pow2 511
 
 typedef struct {
+  uint8_t           count[storage_padding1];
   ICMStorageRecord  record[storage_record_count];
-  uint8_t           padding[storage_padding];
+  uint8_t           padding[storage_padding2];
   uint8_t           valid[storage_record_count];
 } ICMTempStorage;
 

@@ -183,11 +183,16 @@ void evm_load_storage() {
   // fetch all kv pairs and insert to local storage
   uint32_t* data = (uint32_t*)icm_raw_data_base;
   uint32_t numItem = data[0], offset = 1;
+  
+  icm_debug(&numItem, 4);
 
   for (int i = 0; i < numItem; i++, offset += 16) {
     uint32_t index = data[offset] & 0x3f;
     volatile uint32_t* slot = (uint32_t*)(evm_storage_addr + (index << 6));
+
     // memcpy(bug_fixer, slot, 8);
+    icm_debug(data + offset, 32);
+
     slot[0] = (data[offset] & 0xffffffc0) + 0x1;
     for (int j = 1; j < 16; j++)
       slot[j] = data[offset + j];
@@ -203,6 +208,8 @@ void evm_load_storage() {
     }
 #endif
   }
+
+  icm_debug("end", 3);
 }
 
 uint32_t evm_swap_storage(volatile uint32_t *slot) {

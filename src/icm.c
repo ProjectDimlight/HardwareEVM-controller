@@ -43,10 +43,8 @@ void icm_debug(void *data, uint32_t length) {
 
 uint32_t icm_hash(address_t address, uint256_t key) {
   uint32_t ad = *(uint32_t*)(address + 0);
-  uint32_t hi = *(uint32_t*)(key + 28);
   uint32_t lo = *(uint32_t*)(key + 0);
   uint32_t hash = ad;
-  hash = (hash << 5) - hash + hi;
   hash = (hash << 4) + hash + lo;
   hash = hash & (storage_pow2);
   while (hash >= storage_prime) hash -= storage_prime;
@@ -487,15 +485,21 @@ void icm_dump_storage() {
   uint64_t count = 0, content_length = 4;
   for (uint64_t i = 0; i < storage_prime; i++)
   if (icm_temp_storage->valid[i]) {
-    memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
     count++; content_length += sizeof(ICMStorageRecord);
-    icm_temp_storage->valid[i] = 0;
+  }
+  if (count != storage_prime) {
+    content_length = 0;
+    for (uint64_t i = 0; i < storage_prime; i++)
+    if (icm_temp_storage->valid[i]) {
+      memcpy(icm_temp_storage_base + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
+      content_length += sizeof(ICMStorageRecord);
+    }
   }
 #ifdef SIGNATURE
   if (!icm_config->integrity_valid)
     count += 10001;
 #endif
-  *(uint32_t*)icm_raw_data_base = count;
+  *(uint32_t*)icm_temp_storage_base = count;
 
   icm_debug(&count, 4);
   
@@ -509,11 +513,11 @@ void icm_dump_storage() {
 
 #ifdef SIGNATURE
   // the signature is calculated over plaintext
-  ecdsa_sign(res->data + sign_offset, icm_raw_data_base, content_length, STORAGE, 0, icm_config->hevm_priv);
+  ecdsa_sign(res->data + sign_offset, icm_temp_storage_base, content_length, STORAGE, 0, icm_config->hevm_priv);
 #endif
 
   // encrypt storage elements
-  aes_encrypt(res->data, icm_raw_data_base, content_length);
+  aes_encrypt(res->data, icm_temp_storage_base, content_length);
   // memcpy(res->data, icm_raw_data_base, content_length);
 
 #ifdef SIGNATURE
@@ -521,6 +525,9 @@ void icm_dump_storage() {
 #else
   content_length = sign_offset;
 #endif
+
+  for (uint64_t i = 0; i < storage_prime; i++)
+    icm_temp_storage->valid[i] = 0;
 
   build_outgoing_packet(sizeof(ECP) + content_length);
 }
@@ -1255,7 +1262,6 @@ uint8_t icm_decrypt() {
         if (id == storage_prime) {
           icm_dump_storage();
           id = icm_find(base + offset);
-          icm_debug("alive", 5);
         }
 
         // OCM need not encryption
@@ -1440,7 +1446,6 @@ uint8_t icm_encrypt(uint32_t length) {
           if (id == storage_prime) {
             icm_dump_storage();
             id = icm_find(base + offset);
-            icm_debug("alive", 5);
           }
 
           // OCM need not encryption
@@ -1479,7 +1484,6 @@ uint8_t icm_encrypt(uint32_t length) {
             memcpy(get_output_buffer(), head, 16);
 
             id = icm_find(base);
-            icm_debug("alive", 5);
           }
           
 #ifdef ICM_DEBUG
@@ -1629,7 +1633,11 @@ uint8_t icm_encrypt(uint32_t length) {
             uint8_t zero[PAGE_SIZE];
             uint8_t init = 0;
             for (; target_frame->memory_length < req->src_offset; target_frame->memory_length += PAGE_SIZE) {
+#ifdef ENCRYPTION
               memcpy(target_page + target_frame->memory_length, zero_page, PAGE_SIZE);
+#else
+              memset(target_page + target_frame->memory_length, 0, PAGE_SIZE);
+#endif
 #ifdef SIGNATURE
               if (!init) {
                 init = 1;
