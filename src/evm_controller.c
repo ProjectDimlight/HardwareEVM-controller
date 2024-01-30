@@ -88,17 +88,16 @@ void dma_wait() {
 }
 
 void dma_read_storage_slot(uint32_t index, void* dstAddr) {
-  Xil_DCacheFlush();
+  Xil_DCacheInvalidateRange(dstAddr, 1 << 6);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 6;
   *(uint32_t*)dma_config_addr = 0x0;
-  Xil_DCacheFlush();
   dma_wait();
 }
 
 void dma_write_storage_slot(uint32_t index, void* srcAddr) {
-  Xil_DCacheFlush();
+  Xil_DCacheFlushRange(srcAddr, 1 << 6);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_length_addr = 1 << 6;
@@ -107,29 +106,27 @@ void dma_write_storage_slot(uint32_t index, void* srcAddr) {
 }
 
 void dma_read_storage_key(void* dstAddr) {
-  Xil_DCacheFlush();
+  Xil_DCacheInvalidateRange(dstAddr, 1 << 5);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_key;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 5;
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
-  Xil_DCacheFlush();
 }
 
 void dma_read_stack(uint32_t itemNum, void* dstAddr) {
   if (itemNum == 0) return;
-  Xil_DCacheFlush();
+  Xil_DCacheInvalidateRange(dstAddr, itemNum << 5);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
-  Xil_DCacheFlush();
 }
 
 void dma_write_stack(uint32_t itemNum, void* srcAddr) {
   if (itemNum == 0) return;
-  Xil_DCacheFlush();
+  Xil_DCacheFlushRange(srcAddr, itemNum << 5);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
@@ -139,18 +136,17 @@ void dma_write_stack(uint32_t itemNum, void* srcAddr) {
 
 void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length) {
   if (length == 0) return;
-  Xil_DCacheFlush();
+  Xil_DCacheInvalidateRange(dst_addr, length);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
-  Xil_DCacheFlush();
 }
 
 void dma_write_mem(void* src_addr, void* dst_addr, uint32_t length) {
   if (length == 0) return;
-  Xil_DCacheFlush();
+  Xil_DCacheFlushRange(src_addr, length);
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
@@ -206,8 +202,12 @@ uint32_t evm_store_stack(uint32_t num_of_params) {
   uint32_t count = *(volatile uint32_t*)evm_stack_counter;
   if (num_of_params >= 0 && num_of_params <= count)
     count = num_of_params;
-  dma_read_stack(count, data + 1);
-  *(uint32_t*)data = count;
+  *data = count, data = data + 1;
+  uint32_t num = count;
+  while(num) {
+    uint32_t tmp = num > 0x20 ? 0x20 : num;
+    dma_read_stack(tmp, data), num -= tmp, data += (tmp << 3);
+  }
   return (count << 5) + 4;
 }
 
@@ -223,7 +223,11 @@ void evm_load_stack(uint8_t func) {
       tmp = data[i + k], data[i + k] = data[j + k], data[j + k] = tmp;
     i += 8, j -= 8;
   }
-  dma_write_stack(numItem, data + 1);
+  data = data + 1;
+  while (numItem) {
+    uint32_t tmp = numItem > 0x20 ? 0x20 : numItem;
+    dma_write_stack(tmp, data), numItem -= tmp, data += (tmp << 3);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -475,15 +479,14 @@ void clear_debug_buffer() {
 }
 
 uint8_t evm_has_output() {
-  ECP *p = (ECP*)evm_cout_addr;
-  return evm_active && p->opcode != NONE;
+  return evm_active && *(uint32_t*)evm_cout_addr != NONE;
 }
 
 uint8_t wait_for_query = 0;
 
 void handle_ecp(ECP *in) {
   ECP header;
-  memcpy_b(&header, in, 16);
+  dma_memcpy(&header, in, 16);
   ECP *req = &header;
   in->opcode = 0;
   

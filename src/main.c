@@ -48,6 +48,7 @@ void led_and_heart_beat() {
 
 int main(void)
 {
+
   /* start the application*/
   start_application();
   

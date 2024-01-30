@@ -10,7 +10,7 @@
 /*                                                                 */
 /*******************************************************************/
 
-_STACK_SIZE = DEFINED(_STACK_SIZE) ? _STACK_SIZE : 0x18000;
+_STACK_SIZE = DEFINED(_STACK_SIZE) ? _STACK_SIZE : 0x17000;
 _HEAP_SIZE = DEFINED(_HEAP_SIZE) ? _HEAP_SIZE : 0x10000;
 
 _EL0_STACK_SIZE = DEFINED(_EL0_STACK_SIZE) ? _EL0_STACK_SIZE : 1024;
@@ -23,9 +23,7 @@ MEMORY
 {
    psu_ddr_0_MEM_0 : ORIGIN = 0x0, LENGTH = 0x7FF00000
    psu_ocm_ram_0_MEM_0 : ORIGIN = 0xFFFC0000, LENGTH = 0x40000
-   psu_qspi_linear_0_MEM_0 : ORIGIN = 0xC0000000, LENGTH = 0x20000000
-   ocm_rt_space  : ORIGIN = 0xFFFD8000, LENGTH = 0x28000
-   ocm_logic_space  : ORIGIN = 0xFFFC0000, LENGTH = 0x18000
+   ocm_rt_space  : ORIGIN = 0xFFFD8000, LENGTH = 0x18000
 }
 
 /* Specify the default entry point to the program */
@@ -318,7 +316,7 @@ _SDA2_BASE_ = __sdata2_start + ((__sbss2_end - __sdata2_start) / 2 );
    . += _EL0_STACK_SIZE;
    . = ALIGN(64);
    __el0_stack = .;
-} > ocm_rt_space
+} > psu_ddr_0_MEM_0
 
 _end = .;
 }
