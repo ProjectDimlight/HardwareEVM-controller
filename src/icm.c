@@ -488,7 +488,7 @@ void icm_dump_storage() {
     count++; content_length += sizeof(ICMStorageRecord);
   }
   if (count != storage_prime) {
-    content_length = 0;
+    content_length = 4;
     for (uint64_t i = 0; i < storage_prime; i++)
     if (icm_temp_storage->valid[i]) {
       memcpy(icm_temp_storage_base + content_length, &(icm_temp_storage->record[i]), sizeof(ICMStorageRecord));
