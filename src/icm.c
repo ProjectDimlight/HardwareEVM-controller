@@ -1172,6 +1172,13 @@ uint8_t icm_decrypt() {
   } else if (req->opcode == CALL) {
     // icm_tmp_test();
 
+    if (req->func != 0) {
+      return 1;
+    }
+
+    // this is prepare stage, prepares the stack for prefetching
+    // does not invoke CALL
+
     icm_config->count_storage_records = 0;
 
     // check integrity, return 0 if failed, and the tx will not run
@@ -1221,7 +1228,7 @@ uint8_t icm_decrypt() {
 
     icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value, NULL);
 
-    return 1;
+    return 0;
   } else if (req->opcode == END) {
     // External force quit
     reset_udp();
@@ -1295,6 +1302,16 @@ uint8_t icm_decrypt() {
     icm_debug("recv env", 8);
 #endif
       } else if (req->dest == CODE) { // After internalize, this will be code only
+        int prefetch = 0;
+        if (req->func & 16) {
+          prefetch = 1;
+          req->func &= ~16;
+        }
+
+        if (req->dest_offset >= call_frame->code_length)
+          return 0;
+        uint32_t l = call_frame->code_length - req->dest_offset;
+
         call_frame->code_mark[mark_offset(req->dest_offset)] = 1 | (req->func ? 2 : 0);
 
 #ifdef ICM_DEBUG
@@ -1310,61 +1327,61 @@ uint8_t icm_decrypt() {
         }
 #endif
 
-        // this page is encrypted
+        uint8_t sign[64];
+        memcpy(sign, req->data + req->length, 56);
+        memcpy(call_frame->code + req->dest_offset, req->data, padded_size(req->length, 4));
+
         if (req->func) {
           aes_decrypt(icm_raw_data_base, req->data, req->length);
-          char sign[64];
-          memcpy(sign, req->data + req->length, 56);
-
-          if (req->length < PAGE_SIZE) {
-            memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-            memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
-            aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
-          } else {
-            memcpy(call_frame->code + req->dest_offset, req->data, PAGE_SIZE);
-          }
-
+        } else {
+          memcpy(icm_raw_data_base, req->data, req->length);
+        }
+        if (l < PAGE_SIZE) {
+          memset(icm_raw_data_base + l, 0, PAGE_SIZE - l);
+        }
 #ifdef SIGNATURE
+        if (req->func) {
           // verify user hash
           if (!ecdsa_verify_page(sign, icm_raw_data_base, CODE, req->dest_offset, 0, icm_config->user_pub)) {
             icm_debug("user code page verification failed!", 35);
             icm_config->integrity_valid = 0;
           }
-#endif
-          
-        } else {
-          // icm_debug("plaintext code", 14);
-          memcpy(icm_raw_data_base, req->data, req->length);
-          memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-          memcpy(call_frame->code + req->dest_offset, icm_raw_data_base, PAGE_SIZE);
-
-          // [TODO] prefetch
         }
-        
-        // icm_debug(icm_raw_data_base, PAGE_SIZE);
-      } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
+        hash_sign_page(call_frame->code_sign + sign_offset(req->dest_offset), icm_raw_data_base, CODE, req->dest_offset, 0, icm_config->hevm_priv);
+#endif
+      } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) {
+        int prefetch = 0;
+        if (req->func & 16) {
+          prefetch = 1;
+          req->func &= ~16;
+        }
+
+        if (req->dest_offset >= call_frame->input_length)
+          return 0;
+        uint32_t l = call_frame->input_length - req->dest_offset;
+
         call_frame->input_mark[mark_offset(req->dest_offset)] = 1;  // mark as valid
+
 #ifdef ICM_DEBUG
         icm_debug("recv input", 10);
         icm_debug(&req->dest_offset, 4);  
 #endif
-        aes_decrypt(icm_raw_data_base, req->data, req->length);
-        char sign[64];
-        memcpy(sign, req->data + req->length, 56);
-        if (req->length < PAGE_SIZE) {
-          memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
-          memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
-          aes_encrypt(call_frame->input + req->dest_offset, icm_config->buffer, PAGE_SIZE);
-        } else {
-          memcpy(call_frame->input + req->dest_offset, req->data, PAGE_SIZE);
-        }
 
+        uint8_t sign[64];
+        memcpy(sign, req->data + req->length, 56);
+        memcpy(call_frame->input + req->dest_offset, req->data, padded_size(req->length, 4));
+
+        aes_decrypt(icm_raw_data_base, req->data, req->length);
+        if (l < PAGE_SIZE) {
+          memset(icm_raw_data_base + l, 0, PAGE_SIZE - l);
+        }
 #ifdef SIGNATURE
         // verify user hash
         if (!ecdsa_verify_page(sign, icm_raw_data_base, CALLDATA, req->dest_offset, 0, icm_config->user_pub)) {
           icm_debug("user calldata page verification failed!", 39);
           icm_config->integrity_valid = 0;
         }
+        hash_sign_page(call_frame->input_sign + sign_offset(req->dest_offset), icm_raw_data_base, CALLDATA, req->dest_offset, 0, icm_config->hevm_priv);
 #endif
       } else if (req->dest == STACK) {
 #ifdef ICM_DEBUG
@@ -1604,19 +1621,19 @@ uint8_t icm_encrypt(uint32_t length) {
         } else if (req->src == OCM_IMMUTABLE_MEM) {
           target_page = icm_config->immutable_page;
           target_page_sign = icm_config->immutable_page_sign;
-          target_page_length = page_length(icm_config->immutable_page_length);
+          target_page_length = icm_config->immutable_page_length;
           target_page_type = icm_config->immutable_page_type;
         } else if (req->src == CODE) {
           target_page = call_frame->code;
           target_page_sign = call_frame->code_sign;
           target_page_mark = call_frame->code_mark;
-          target_page_length = page_length(call_frame->code_length);
+          target_page_length = call_frame->code_length;
           target_page_type = CODE;
         } else if (req->src == CALLDATA) {
           target_page = call_frame->input;
           target_page_sign = call_frame->input_sign;
           target_page_mark = call_frame->input_mark;
-          target_page_length = page_length(call_frame->input_length);
+          target_page_length = call_frame->input_length;
           target_page_type = CALLDATA;
         } else if (req->src == MEM) {
           target_page = call_frame->memory;
@@ -1732,13 +1749,30 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("received", 8);
               icm_debug(icm_raw_data_base, PAGE_SIZE);
 #endif
+              uint32_t length = PAGE_SIZE;
+              if (target_page_length < req->dest_offset + PAGE_SIZE) {
+                length = target_page_length - req->dest_offset;
+                icm_debug(&length, 4);
+              }
               // [TODO] check signature for calldata
               if (req->src != CODE || target_page_mark[mark_offset(req->dest_offset)] & 2) { // encrypted
-                aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+                aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, padded_size(length, 4));
+                memset(icm_raw_data_base + length, 0, PAGE_SIZE - length);
               } else {
                 // icm_debug("plaintext code", 14);
-                memcpy(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
+                memcpy(icm_raw_data_base, target_page + req->dest_offset, length);
+                memset(icm_raw_data_base + length, 0, PAGE_SIZE - length);
               }
+              
+#ifdef SIGNATURE
+              if (!hash_verify_page(target_page_sign + sign_offset(req->dest_offset), icm_raw_data_base, target_page_type, req->dest_offset, 0, icm_config->hevm_pub)) {
+                icm_debug("page signature verification failed!", 35);
+                icm_debug(&target_page_type, 1);
+                icm_debug(&(req->dest_offset), 4);
+                icm_debug(&(target_page_length), 4);
+                icm_config->integrity_valid = 0;
+              }
+#endif
             } else if (req->src == CODE && icm_config->call_frame_pointer->locally_deployed_contract_code) {
 #ifdef ICM_DEBUG
 #endif             
@@ -1780,7 +1814,7 @@ uint8_t icm_encrypt(uint32_t length) {
                 icm_debug("page signature verification failed!", 35);
                 icm_debug(&target_page_type, 1);
                 icm_debug(&(req->dest_offset), 4);
-                icm_debug(&(target_frame->memory_length), 4);
+                icm_debug(&(target_page_length), 4);
                 icm_config->integrity_valid = 0;
               }
 #endif
