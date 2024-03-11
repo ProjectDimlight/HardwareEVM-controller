@@ -129,7 +129,7 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  uint8_t icm_ocm_stack_hash[4 * PAGE_SIZE];
+  uint8_t icm_ocm_stack_hash[8 * PAGE_SIZE];
   uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
   uint8_t icm_ocm_return_has_sign;
 

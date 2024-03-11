@@ -82,7 +82,7 @@ int main(void)
 
     check_evm_output();
     icm_call_end_state_machine();
-    // check_debug_buffer();
+    check_debug_buffer();
 
     retry_timer();
     led_and_heart_beat();

@@ -462,6 +462,12 @@ void check_debug_buffer() {
     // gas8, pc4, stacksize4, gap16, res32
     for (int i = 0; i < 16; i++, offset++)
       data[offset] = debug_buffer_base[((local_debug_counter & 127) << 4) + i];
+    if (offset >= 0x3000) {
+    	memcpy(get_output_buffer(), ecp_debug_template, sizeof(ecp_debug_template));
+    	((ECP*)get_output_buffer())->length = (offset << 2);
+    	icm_encrypt(sizeof(ECP) + (offset << 2));
+    	offset = 0;
+    }
   }
 
   if (offset == 0)
@@ -489,9 +495,9 @@ void handle_ecp(ECP *in) {
   dma_memcpy(&header, in, 16);
   ECP *req = &header;
   in->opcode = 0;
-  
+
   uint8_t ready = 0;
-  
+
   check_debug_buffer();
 
 #ifdef ICM_DEBUG

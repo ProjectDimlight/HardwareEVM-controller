@@ -163,9 +163,17 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
 #endif
   
   // create a new frame
+  if (call_frame == &icm_config->call_stack[63]) {
+    icm_debug("frame overflow", 14);
+  }
+
   void *base = call_frame->top;
   void *sign_base = call_frame->sign_top;
+
   call_frame++;
+  if (call_frame == icm_config->call_stack + 32)
+    icm_debug("frame overflow", 14);
+
   memcpy(call_frame->address, callee_address, sizeof(address_t));
   call_frame->storage_address = callee_storage_address;
   call_frame->caller_address = callee_caller_address;
@@ -194,6 +202,9 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->stack_sign  = call_frame->input_mark  + mark_length(input_length);
   call_frame->memory_sign = call_frame->stack_sign  + 32;
 
+  if (call_frame->memory_sign >= icm_config->icm_ocm_return_sign_tmp)
+    icm_debug("sign overflow", 13);
+
 #ifdef ICM_DEBUG
   icm_debug("call frame set offset", 21);
 #endif
@@ -203,6 +214,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   for (char *p = call_frame->code_mark; p < call_frame->input_sign; p ++) {
     *p = 0;
   }
+
   for (char *p = call_frame->input_mark; p < call_frame->stack_sign; p ++) {
     *p = 0;
   }
@@ -592,6 +604,7 @@ uint8_t address_is_precompiled(address_p address) {
 }
 
 void icm_switch_contract(address_p address, address_p storage_address, void *value) {
+  static int cnt = 0;
   icm_config->contract_address_waiting_for_size = address;
   ECP *ecp = get_output_buffer();
   ecp->opcode = ICM;
@@ -875,7 +888,7 @@ void icm_call_end_state_machine() {
     call_frame->return_length = icm_config->immutable_page_length;
     memset(icm_raw_data_base, 0, 32);
     *(uint32_t*)icm_raw_data_base = call_frame->return_length;
-    dma_write_mem(evm_env_addr + 8 * 32, icm_raw_data_base, 32);
+    dma_write_mem(icm_raw_data_base, evm_env_addr + 8 * 32, 32);
 
     // Resume
     cesm_state = CESM_WAIT_FOR_MEMORY_COPY;
@@ -916,7 +929,7 @@ void icm_call_end_state_machine() {
       icm_get_address_for_create2(call_frame->address, code_hash, sender_address, salt);
       memset(icm_raw_data_base, 0, 32);
       memcpy(icm_raw_data_base, call_frame->storage_address, sizeof(address_t));
-      dma_write_mem(evm_env_addr + 4 * 32, icm_raw_data_base, 32);
+      dma_write_mem(icm_raw_data_base, evm_env_addr + 4 * 32, 32);
 
       // transfer call value
       icm_switch_contract(
@@ -1327,12 +1340,10 @@ uint8_t icm_decrypt() {
           char sign[64];
           memcpy(sign, req->data + req->length, 56);
 
-          if (req->length < PAGE_SIZE) {
+          if (req->length <= PAGE_SIZE) {
             memset(icm_raw_data_base + req->length, 0, PAGE_SIZE - req->length);
             memcpy(icm_config->buffer, icm_raw_data_base, PAGE_SIZE);
             aes_encrypt(call_frame->code + req->dest_offset, icm_config->buffer, PAGE_SIZE);
-          } else {
-            memcpy(call_frame->code + req->dest_offset, req->data, PAGE_SIZE);
           }
 
 #ifdef SIGNATURE
@@ -1354,7 +1365,7 @@ uint8_t icm_decrypt() {
         
         // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
-        call_frame->input_mark[mark_offset(req->dest_offset)] = 1;  // mark as valid
+        call_frame->input_mark[mark_offset(req->dest_offset)] = 1 | 2;  // mark as valid
 #ifdef ICM_DEBUG
         icm_debug("recv input", 10);
         icm_debug(&req->dest_offset, 4);  
@@ -1744,7 +1755,7 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug(icm_raw_data_base, PAGE_SIZE);
 #endif
               // [TODO] check signature for calldata
-              if (req->src != CODE || target_page_mark[mark_offset(req->dest_offset)] & 2) { // encrypted
+              if (target_page_mark[mark_offset(req->dest_offset)] & 2) { // encrypted
                 aes_decrypt(icm_raw_data_base, target_page + req->dest_offset, PAGE_SIZE);
               } else {
                 // icm_debug("plaintext code", 14);
