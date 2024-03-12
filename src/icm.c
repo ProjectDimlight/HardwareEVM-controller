@@ -152,6 +152,8 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     // no longer need to copy memory sign
     call_frame->top = call_frame->memory + call_frame->memory_length;
     call_frame->sign_top = call_frame->memory_sign + sign_length(call_frame->memory_length);
+    if (call_frame->sign_top >= icm_ocm_return_sign_tmp)
+      icm_debug("ocm_stack_hash overflow", 23);
   }
 
 #ifdef ICM_DEBUG
@@ -994,6 +996,8 @@ void icm_call_end_state_machine() {
 #endif
       // The return value is the code to be deployed
       icm_config->deployed_codes_pointer++;
+      if (icm_config->deployed_codes_pointer >= icm_config->local_balance)
+        icm_debug("deployed code overflow", 22);
       uint8_t *salt = (deployFrame->stack + 32 * 3);
       uint8_t *sender_address = deployFrame->address;
       memcpy(icm_config->deployed_codes_pointer->address, call_frame->address, sizeof(address_t));
