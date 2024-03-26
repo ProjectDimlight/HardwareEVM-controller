@@ -22,7 +22,8 @@ enum ICMFunc{
   ICM_CLEAR_STORAGE = 1,
   ICM_SET_USER_PUB, 
   ICM_SET_CONTRACT,
-  ICM_ACK
+  ICM_ACK,
+  ICM_CLEAR_BALANCE
 };
 
 enum CESMStates{
@@ -71,6 +72,11 @@ typedef struct __OCMStackFrame{
   uint8_t *top, *sign_top;
 } OCMStackFrame;
 
+typedef struct __OCMBalance {
+  address_t address;
+  uint256_t balance;
+} OCMBalance;
+
 typedef struct {
   uint8_t buffer[PAGE_SIZE];
   uint8_t ocm_mem_page[PAGE_SIZE];
@@ -116,6 +122,9 @@ typedef struct {
   OCMDeployedCodeFrame deployed_codes[32];
   OCMDeployedCodeFrame *deployed_codes_pointer, *found_deployed_code;
 
+  OCMBalance local_balance[128];
+  OCMBalance *local_balance_pointer;
+
   ////////////////////////////////////////////
 
   address_p contract_address_waiting_for_size;
@@ -129,7 +138,7 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  uint8_t icm_ocm_stack_hash[8 * PAGE_SIZE];
+  uint8_t icm_ocm_stack_hash[16 * PAGE_SIZE];
   uint8_t icm_ocm_return_sign_tmp[PAGE_SIZE];
   uint8_t icm_ocm_return_has_sign;
 

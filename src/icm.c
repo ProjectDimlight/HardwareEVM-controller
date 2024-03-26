@@ -73,6 +73,68 @@ uint32_t icm_find(uint256_t key) {
 
 ///////////////////////////////////////////////////////////////////
 
+OCMBalance* getBalance(address_t addr) {
+  for (OCMBalance* i = icm_config->local_balance; i < icm_config->local_balance_pointer; i++)
+    if (memcmp(i->address, addr, sizeof(address_t)) == 0)
+      return i;
+  return NULL;
+}
+
+int balanceCanTransfer(uint256_t src, uint256_t val) {
+  uint32_t *source = (uint32_t*)src;
+  uint32_t *value = (uint32_t*)val;
+  for (int i = sizeof(uint256_t) / sizeof(uint32_t) - 1; i >= 0; i--) {
+    if (source[i] > value[i]) break;
+    else if (source[i] < value[i]) return 0;
+  }
+  return 1;
+}
+
+void balanceSub(uint256_t x, uint256_t y) {
+  uint32_t *X = (uint32_t*)x;
+  uint32_t *Y = (uint32_t*)y;
+  for (int i = sizeof(uint256_t) / sizeof(uint32_t) - 1; i >= 0; i--) {
+    if (X[i] < Y[i])
+      X[i + 1]--;
+    X[i] = X[i] - Y[i];
+  }
+}
+
+void balanceAdd(uint256_t x, uint256_t y) {
+  uint32_t *X = (uint32_t*)x;
+  uint32_t *Y = (uint32_t*)y;
+  for (int i = 0; i < sizeof(uint256_t) / sizeof(uint32_t); i++) {
+    uint32_t tmp = X[i] + Y[i];
+    if (tmp < X[i]) X[i + 1]++;
+    X[i] = tmp;
+  }
+}
+
+void transferBalance(address_t src, address_t dst, uint256_t val) {
+  OCMBalance *from = getBalance(src), *to = getBalance(dst);
+  if (balanceCanTransfer(from->balance, val)) {
+    balanceSub(from->balance, val), balanceAdd(to->balance, val);
+  } else {
+    icm_debug("balance underflow", 17);
+  }
+}
+
+void fetchBalance(address_t address, uint256_t balance) {
+  if (getBalance(address) == NULL) {
+    memcpy(icm_config->local_balance_pointer->address, address, sizeof(address_t));
+    memcpy(icm_config->local_balance_pointer->balance, balance, sizeof(uint256_t));
+    icm_config->local_balance_pointer++;
+    if (icm_config->local_balance_pointer >= &icm_config->local_balance_pointer)
+      icm_debug("balance ocm overflow", 20);
+  }
+}
+
+void clearBalance() {
+  icm_config->local_balance_pointer = icm_config->local_balance;
+}
+
+///////////////////////////////////////////////////////////////////
+
 uint32_t page_length(uint32_t length) {
   return PAGES(length) << PAGE_ADDR_W;
 }
@@ -152,7 +214,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     // no longer need to copy memory sign
     call_frame->top = call_frame->memory + call_frame->memory_length;
     call_frame->sign_top = call_frame->memory_sign + sign_length(call_frame->memory_length);
-    if (call_frame->sign_top >= icm_ocm_return_sign_tmp)
+    if (call_frame->sign_top >= icm_config->icm_ocm_return_sign_tmp)
       icm_debug("ocm_stack_hash overflow", 23);
   }
 
@@ -237,13 +299,9 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     *((uint32_t*)(icm_raw_data_base + 32 * 6)) = call_frame->input_length;
     memcpy(icm_raw_data_base + 32 * 7, call_frame->value, sizeof(uint256_t));
     *((uint32_t*)(icm_raw_data_base + 32 * 8)) = call_frame->return_length;
-    if (balance) {
+    if (balance != NULL)
       memcpy(icm_raw_data_base + 32 * 9, balance, sizeof(uint256_t));
-      dma_write_mem(icm_raw_data_base, evm_env_addr, 10 * 32);
-    } else {
-      dma_write_mem(icm_raw_data_base, evm_env_addr, 9 * 32);
-    }
-
+    dma_write_mem(icm_raw_data_base, evm_env_addr, 10 * 32);
 #ifdef ICM_DEBUG
     icm_debug("set env regs", 12);
 #endif
@@ -271,7 +329,8 @@ void icm_stack_pop() {
     *((uint32_t*)(icm_raw_data_base + 32 * 6)) = call_frame->input_length;
     memcpy(icm_raw_data_base + 32 * 7, call_frame->value, sizeof(uint256_t));
     *((uint32_t*)(icm_raw_data_base + 32 * 8)) = call_frame->return_length;
-    dma_write_mem(icm_raw_data_base, evm_env_addr, 32 * 9);
+    memcpy(icm_raw_data_base + 32 * 9, getBalance(call_frame->storage_address)->balance, sizeof(uint256_t));
+    dma_write_mem(icm_raw_data_base, evm_env_addr, 32 * 10);
   }
 
 #ifdef ICM_DEBUG
@@ -462,6 +521,8 @@ void icm_clear_storage() {
   icm_config->deployed_codes_pointer = icm_config->deployed_codes;
   icm_config->deployed_codes->top = icm_ram_deployed_code;
   
+  icm_config->local_balance_pointer = icm_config->local_balance;
+  
   icm_config->integrity_valid = 1;
   icm_config->check_signature_of_immutable_mem = 1;
 }
@@ -606,7 +667,10 @@ uint8_t address_is_precompiled(address_p address) {
 }
 
 void icm_switch_contract(address_p address, address_p storage_address, void *value) {
-  static int cnt = 0;
+//  static int cnt = 0;
+//  cnt++;
+//  if (cnt == 25)
+//	  icm_debug("here", 4);
   icm_config->contract_address_waiting_for_size = address;
   ECP *ecp = get_output_buffer();
   ecp->opcode = ICM;
@@ -748,7 +812,7 @@ void icm_call_end_state_machine() {
       callee_address = evm_stack + 32;
       callee_storage_address = (func == OP_CALLCODE ? call_frame->storage_address : SELF_ADDRESS);
       callee_caller_address = call_frame->storage_address;
-      value = evm_stack + 64;
+      value = (uint8_t*)((uint64_t)evm_stack + 64);
       code_length = icm_config->ext_code_size;
       input_length = *(uint32_t*)(evm_stack + 32 * 4);
       offset = *(uint32_t*)(evm_stack + 32 * 3);
@@ -761,8 +825,7 @@ void icm_call_end_state_machine() {
       callee_storage_address = (func == OP_DELEGATECALL ? call_frame->storage_address : SELF_ADDRESS);
       callee_caller_address = (func == OP_DELEGATECALL ? call_frame->caller_address : call_frame->storage_address);
       if (func == OP_DELEGATECALL) {
-        dma_read_mem(evm_env_addr + 7 * 32, icm_raw_data_base, 32);
-        memcpy(value, icm_raw_data_base, 32);
+        value = (uint8_t*)call_frame->value;
       } else {
         value = icm_config->zero;
       }
@@ -785,7 +848,6 @@ void icm_call_end_state_machine() {
       size = *(uint32_t*)(evm_stack + 32 * 2);
       call_frame->ret_offset = 0;
       call_frame->ret_size = 0;
-      memcpy(icm_config->contract_balance_after_transfer, value, 32);
     }
 
 #ifdef ICM_DEBUG
@@ -796,6 +858,7 @@ void icm_call_end_state_machine() {
 #endif
 
     if (icm_config->calling_precompiled) {
+      // no need to transfer value (avoid ether burn)
       // no need to push stack
       // just copy params
       void *base = call_frame->top;
@@ -812,7 +875,9 @@ void icm_call_end_state_machine() {
       cesm_state = CESM_WAIT_FOR_PRECOMPILED_INPUT_COPY;
     } else {
       // stack push
-      icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value, icm_config->contract_balance_after_transfer);
+      if (func != OP_DELEGATECALL && func != OP_STATICCALL)
+        transferBalance(callee_caller_address, callee_address, value);
+      icm_stack_push(callee_address, callee_storage_address, callee_caller_address, code_length, input_length, gas, value, getBalance(callee_address)->balance);
 #ifdef ICM_DEBUG
       icm_debug("address:", 8);
       icm_debug(callee_address, 20);
@@ -1019,7 +1084,7 @@ void icm_call_end_state_machine() {
 
     if (icm_stack_is_empty()) {  
       icm_debug("STORAGE cnt:", 12);
-      icm_debug(&(icm_config->count_storage_records), 4);
+      // icm_debug(&(icm_config->count_storage_records), 4);
 
       cesm_state = CESM_IDLE;
 
@@ -1179,10 +1244,10 @@ uint8_t icm_decrypt() {
     } else if (req->func == ICM_SET_CONTRACT) {
       if (icm_config->contract_address_waiting_for_size &&
         memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
+        fetchBalance(icm_config->contract_address_waiting_for_size, req->data + 20);
         icm_config->contract_address_waiting_for_size = NULL;
         if (icm_config->found_deployed_code == NULL)
           icm_config->ext_code_size = req->length;
-        memcpy(icm_config->contract_balance_after_transfer, req->data + 20, 32);
         icm_step();
       }  
     } else if (req->func == ICM_FINISH) {
@@ -1191,6 +1256,8 @@ uint8_t icm_decrypt() {
       icm_debug(&(icm_config->immutable_page_length), 4);
 #endif
       icm_step();
+    } else if (req->func == ICM_CLEAR_BALANCE) {
+      clearBalance();
     }
     return 0;
   } else if (req->opcode == DEBUG) {  // only for debug mode, does not encrypt
@@ -1214,7 +1281,7 @@ uint8_t icm_decrypt() {
 
     // check passed
     call_frame = icm_config->call_stack;
-    dma_read_mem(evm_env_addr + 2 * 32, icm_raw_data_base, 32 * 6);
+    dma_read_mem(evm_env_addr + 2 * 32, icm_raw_data_base, 32 * 8);
     memcpy(call_frame->address, icm_raw_data_base + 32, sizeof(address_t));
     
     call_frame->storage_address = call_frame->address;
@@ -1228,7 +1295,7 @@ uint8_t icm_decrypt() {
     address_t address;
     uint32_t code_length, input_length;
     uint64_t gas;
-    uint256_t value;
+    uint256_t value, balance;
 
     memcpy(address, icm_raw_data_base + 32 * 2, sizeof(address_t));
     icm_config->found_deployed_code = icm_find_locally_deployed_contract_code(address);
@@ -1240,15 +1307,14 @@ uint8_t icm_decrypt() {
     input_length = *((uint32_t*)(icm_raw_data_base + 32 * 4));
     gas = *((uint64_t*)(icm_raw_data_base));
     memcpy(value, icm_raw_data_base + 32 * 5, 32);
-
+    memcpy(balance, icm_raw_data_base + 32 * 7, 32);
 #ifdef ICM_DEBUG
     icm_debug(address, 20);
     icm_debug(&code_length, 4);
     icm_debug(&input_length, 4);
 #endif
-
-    icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value, NULL);
-
+    icm_stack_push(address, SELF_ADDRESS, call_frame->address, code_length, input_length, gas, value, balance);
+    fetchBalance(address, balance);
     return 1;
   } else if (req->opcode == END) {
     // External force quit

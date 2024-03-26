@@ -446,7 +446,7 @@ void evm_memory_copy(ECP *req) {
 }
 
 uint16_t local_debug_counter = 0;
-uint8_t local_debug_enable = 1;
+uint8_t local_debug_enable = 0;
 uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
 
 void check_debug_buffer() {
