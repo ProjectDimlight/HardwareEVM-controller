@@ -287,7 +287,7 @@ void evm_dump_memory() {
   ECP *buf = get_output_buffer();
   uint8_t *memory = (uint8_t*)evm_mem_addr;
   for (int i = 0; i < NUMBER_OF_PAGES; i++) {
-    uint32_t pte = *data_source_to_pte(MEM, i << 10);
+    volatile uint32_t pte = *data_source_to_pte(MEM, i << 10);
     if ((pte & 2) == 0)  // empty
       continue;
     memset(buf, 0, sizeof(ECP));
@@ -309,7 +309,7 @@ void evm_load_memlike(uint8_t dest, uint32_t dest_offset) {
   dma_memcpy(addr_dest, icm_raw_data_base, PAGE_SIZE);
   if (dest != ENV) {
     // update page table
-    uint32_t *pte = data_source_to_pte(dest, dest_offset);
+    volatile uint32_t *pte = data_source_to_pte(dest, dest_offset);
     *pte = (dest_offset & page_tagid_mask) | 0x2;
   }
 }
@@ -378,7 +378,7 @@ void evm_memory_copy(ECP *req) {
   pending_evm_memory_copy_request.valid = 0;
 
   void *addr_src, *addr_dest;
-  uint32_t *pte_src, *pte_dest;
+  volatile uint32_t *pte_src, *pte_dest;
 
   while (req->length > 0) {
     // before page
@@ -446,7 +446,7 @@ void evm_memory_copy(ECP *req) {
 }
 
 uint16_t local_debug_counter = 0;
-uint8_t local_debug_enable = 0;
+uint8_t local_debug_enable = 1;
 uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
 
 void check_debug_buffer() {

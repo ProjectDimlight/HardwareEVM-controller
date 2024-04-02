@@ -144,33 +144,49 @@ typedef struct {
 
   ////////////////////////////////////////////
 
+  // TODO: may delete this value ? same as count
   uint32_t count_storage_records;
+  uint8_t frame_depth;
 
 } ICMConfig;
 
 typedef struct {
   uint256_t k;
-  uint256_t v;
-  uint256_t v_origin;
   address_t a;
 } ICMStorageRecord;
 
+typedef struct {
+  uint256_t v;
+  uint8_t depth;
+} ICMStorageItem;
+
 #define storage_record_size 117
 #define storage_record_count 280
-#define storage_padding1 4
-#define storage_padding2 4
 #define storage_prime 277
 #define storage_pow2 511
 
 typedef struct {
-  uint8_t           count[storage_padding1];
+  /*
+  pool: memory pool for storage item
+  pos: the remained avaliable position of pool
+  head, nxt: linked list for storage item of same (addr, key)
+  bel: the hash index of item
+  ordered_index: the index of item, ordered by its depth field
+  */
+  uint32_t          item_count;
+  ICMStorageItem    pool[storage_record_count];
+  uint32_t          head[storage_record_count], nxt[storage_record_count];
+  uint32_t          bel[storage_record_count], pos[storage_record_count];
+  uint32_t          ordered_index[storage_record_count];
+} ICMStoragePool;
+
+typedef struct {
   ICMStorageRecord  record[storage_record_count];
-  uint8_t           padding[storage_padding2];
+  ICMStoragePool    pool;
   uint8_t           valid[storage_record_count];
 } ICMTempStorage;
 
 extern void * const icm_raw_data_base         ;   // decrypted packet
-extern void * const icm_temp_storage_base     ;   // temporary storage
 extern void * const icm_storage_history_base  ;   // storage history window for dummy request generation
 extern void * const icm_config_base           ;   // system configuration
 extern ICMTempStorage * const icm_temp_storage;
