@@ -17,15 +17,13 @@
 
 // these address spaces are mapped to secure on chip memory
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
-void * const icm_config_base            = (void*)0xFFFD0000ll;   // system configuration and sensitive data
+ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFC8000ll;
+ICMConfig      * const icm_config       = (ICMConfig*)0xFFFD0000ll;
+void * const icm_temp_storage_base      = (void*)0xFFFE0000ll;   // temporary storage
 
 uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_return_tmp[16 * PAGE_SIZE];
 uint8_t icm_ram_deployed_code[1024 * PAGE_SIZE];
-
-ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFC8000ll;
-ICMConfig      * const icm_config       = (ICMConfig*)0xFFFD0000ll;
-
 uint8_t zero_page[PAGE_SIZE];
 
 ///////////////////////////////////////////////////////////////////
@@ -54,6 +52,8 @@ uint32_t icm_hash(address_t address, uint256_t key) {
 // for insertion, use this as the new index
 // for query, 
 uint32_t icm_find(uint256_t key) {
+  if (icm_temp_storage->pool.item_count == storage_prime)
+    icm_dump_storage();
   uint32_t hash = icm_hash(call_frame->storage_address, key);
   uint32_t cnt = 0;
   for (;
@@ -64,8 +64,9 @@ uint32_t icm_find(uint256_t key) {
     hash = ((hash == (storage_prime - 1)) ? 0 : (hash + 1)), cnt++);
 
   if (cnt == storage_prime) {
-    icm_debug("storage overflow", 16);
-    return storage_prime;
+    icm_dump_storage();
+    icm_debug("storage dump", 12);
+    return icm_find(key);
   }
   else
     return hash;
@@ -554,9 +555,21 @@ void icm_pool_init(ICMStoragePool *p) {
     p->pos[i] = i;
 }
 
-void icm_add_storage_item(ICMStoragePool *p, uint32_t id, uint256_t v) {
+void icm_add_storage_item(ICMStoragePool *p, uint32_t id, uint256_t v, uint256_t k, address_t a) {
+  // update valid
+  if (!icm_temp_storage->valid[id]) {
+    icm_temp_storage->valid[id] = 1;
+    memcpy(icm_temp_storage->record[id].k, k, sizeof(uint256_t));
+    memcpy(icm_temp_storage->record[id].a, a, sizeof(address_t));
+  }
+  // check local depth item
+  uint32_t pos = p->head[id];
+  if (pos != (uint32_t)(-1) && p->pool[pos].depth == icm_config->frame_depth) {
+    memcpy(p->pool[pos].v, v, sizeof(uint256_t));
+    return;
+  }
   // update ICMStorageItem
-  uint32_t pos = p->pos[p->item_count];
+  pos = p->pos[p->item_count];
   p->pool[pos].depth = icm_config->frame_depth;
   memcpy(p->pool[pos].v, v, sizeof(uint256_t));
   // maintain bel info, update linked list
@@ -569,17 +582,17 @@ void icm_add_storage_item(ICMStoragePool *p, uint32_t id, uint256_t v) {
 
 void icm_del_storage_item(ICMStoragePool *p, uint32_t id) {
   // update linked list
-  if (p->nxt[id] == 0xffffffff)
+  if (p->nxt[id] == (uint32_t)(-1))
     icm_temp_storage->valid[p->bel[id]] = 0;
   p->head[p->bel[id]] = p->nxt[id];
-  p->nxt[id] = 0xffffffff;
+  p->nxt[id] = (uint32_t)(-1);
 }
 
-// single tx will not cause storage overflow
+// dump all items with depth = 0 (which is definitely modification)
 void icm_dump_storage() {
   // dump storage from OCM to HOST
-  ECP *res = get_output_buffer();
-  //memcpy(res, req, sizeof(ECP));
+  ECP *res = get_output_buffer(), tmp;
+  memcpy(&tmp, res, sizeof(ECP));
   res->opcode = COPY;
   res->src = STORAGE;
   res->dest = HOST;
@@ -588,19 +601,23 @@ void icm_dump_storage() {
   res->dest_offset = 0;
 
   ICMStoragePool* p = &(icm_temp_storage->pool);
-  uint32_t count = p->item_count, content_length = 4;
-  for (; count; count--) {
-      uint32_t index = p->ordered_index[count];
-      memcpy(res->data + content_length, &(icm_temp_storage->record[p->bel[index]]), sizeof(ICMStorageRecord)), content_length += sizeof(ICMStorageRecord);
-      memcpy(res->data + content_length, &(p->pool[index].v), sizeof(uint256_t)), content_length += sizeof(uint256_t);
-      icm_del_storage_item(p, index), p->pos[count] = index;
-    }
-  p->item_count = 0;
+  uint32_t count = p->item_count, content_length = 4, i = 0;
+  
+  for (; i < p->item_count; i++) {
+	  uint32_t index = p->ordered_index[i];
+    if (p->pool[index].depth) break;
+    memcpy(icm_temp_storage_base + content_length, &(icm_temp_storage->record[p->bel[index]]), sizeof(ICMStorageRecord)), content_length += sizeof(ICMStorageRecord);
+    memcpy(icm_temp_storage_base + content_length, &(p->pool[index].v), sizeof(uint256_t)), content_length += sizeof(uint256_t);
+    icm_del_storage_item(p, index), p->pos[--count] = index;
+  }
+  for (uint32_t j = i; j < p->item_count; j++)
+    p->ordered_index[j - i] = p->ordered_index[j];
+  p->item_count = count;
 #ifdef SIGNATURE
   if (!icm_config->integrity_valid)
     count += 10001;
 #endif
-  *(uint32_t*)res->data = count;
+  *(uint32_t*)icm_temp_storage_base = i;
   res->length = content_length;
 
 #ifdef ENCRYPTION
@@ -611,11 +628,11 @@ void icm_dump_storage() {
 
 #ifdef SIGNATURE
   // the signature is calculated over plaintext
-  ecdsa_sign(res->data + sign_offset, res->data, content_length, STORAGE, 0, icm_config->hevm_priv);
+  ecdsa_sign(res->data + sign_offset, icm_temp_storage_base, content_length, STORAGE, 0, icm_config->hevm_priv);
 #endif
 
   // encrypt storage elements
-  aes_encrypt(res->data, res->data, content_length);
+  aes_encrypt(res->data, icm_temp_storage_base, content_length);
   // memcpy(res->data, icm_raw_data_base, content_length);
 
 #ifdef SIGNATURE
@@ -625,6 +642,7 @@ void icm_dump_storage() {
 #endif
 
   build_outgoing_packet(sizeof(ECP) + content_length);
+  memcpy(res, &tmp, sizeof(ECP));
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -694,10 +712,6 @@ uint8_t address_is_precompiled(address_p address) {
 }
 
 void icm_switch_contract(address_p address, address_p storage_address, void *value) {
-//  static int cnt = 0;
-//  cnt++;
-//  if (cnt == 25)
-//	  icm_debug("here", 4);
   icm_config->contract_address_waiting_for_size = address;
   ECP *ecp = get_output_buffer();
   ecp->opcode = ICM;
@@ -1112,30 +1126,28 @@ void icm_call_end_state_machine() {
     while(frame_st && p->pool[p->ordered_index[frame_st - 1]].depth == icm_config->frame_depth) frame_st--;
     // handle storage update, revert(delete) all the storage modification with this depth
     if (end_func == OP_REVERT || end_func == OP_STATICCALL) {
-      p->item_count = frame_st;
-      for (; frame_st < tmp; frame_st++)
-        icm_del_storage_item(p, p->ordered_index[frame_st]), p->pos[frame_st] = p->ordered_index[frame_st];
+      for (; frame_st < tmp; frame_st++) {
+        icm_del_storage_item(p, p->ordered_index[frame_st]);
+        p->pos[--p->item_count] = p->ordered_index[frame_st];
+      }
     }
     else {  // save this depth storage to next depth
       uint32_t st = frame_st;
       for (; frame_st < tmp; frame_st++) {
         uint32_t index = p->ordered_index[frame_st];
-        if (p->nxt[index] != 0xffffffff && p->pool[p->nxt[index]].depth == icm_config->frame_depth - 1) {
+        if (p->nxt[index] != (uint32_t)(-1) && p->pool[p->nxt[index]].depth == icm_config->frame_depth - 1) {
           memcpy(p->pool[p->nxt[index]].v, p->pool[index].v, sizeof(uint256_t));
           icm_del_storage_item(p, index), p->pos[--p->item_count] = index;
         } else {
           p->pool[index].depth = icm_config->frame_depth - 1;
           p->ordered_index[st++] = index;
         }
-        p->item_count = st;
       }
     }
 
     icm_stack_pop();
 
     if (icm_stack_is_empty()) {
-      icm_dump_storage();
-
       cesm_state = CESM_IDLE;
 
       // Finish
@@ -1315,9 +1327,6 @@ uint8_t icm_decrypt() {
     return 1;
   } else if (req->opcode == CALL) {
     // icm_tmp_test();
-
-    icm_config->count_storage_records = 0;
-
     // check integrity, return 0 if failed, and the tx will not run
 
     // check stack hash
@@ -1403,13 +1412,7 @@ uint8_t icm_decrypt() {
       for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
         uint32_t id = icm_find(base + offset);
         // OCM need not encryption
-        if (!icm_temp_storage->valid[id]) {
-          icm_temp_storage->valid[id] = 1;
-          icm_config->count_storage_records ++;
-          memcpy(icm_temp_storage->record[id].k, base + offset, sizeof(uint256_t));
-          memcpy(icm_temp_storage->record[id].a, call_frame->storage_address, sizeof(address_t));
-        }
-        icm_add_storage_item(&(icm_temp_storage->pool), id, base + offset + 32);
+        icm_add_storage_item(&(icm_temp_storage->pool), id, base + offset + 32, base + offset, call_frame->storage_address);
 
 #ifdef ICM_DEBUG
         icm_debug(&(icm_temp_storage->record[id].k), 32);
@@ -1576,12 +1579,7 @@ uint8_t icm_encrypt(uint32_t length) {
 
         for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
           uint32_t id = icm_find(base + offset);
-          icm_add_storage_item(&(icm_temp_storage->pool), id, base + offset + 32);
-          
-          if (!icm_temp_storage->valid[id]) {
-            icm_temp_storage->valid[id] = 1;
-            icm_config->count_storage_records ++;
-          }
+          icm_add_storage_item(&(icm_temp_storage->pool), id, base + offset + 32, base + offset, call_frame->storage_address);
 
 #ifdef ICM_DEBUG
           icm_debug(&(icm_temp_storage->record[id].k), 32);
@@ -1610,11 +1608,7 @@ uint8_t icm_encrypt(uint32_t length) {
 #endif
 
           // OCM need no encryption
-          if (!icm_temp_storage->valid[id]) {
-            icm_temp_storage->valid[id] = 1;
-            icm_config->count_storage_records ++;
-          }
-          icm_add_storage_item(&(icm_temp_storage->pool), id, base + 32);
+          icm_add_storage_item(&(icm_temp_storage->pool), id, base + 32, base, call_frame->storage_address);
           base += 64;
         }
 
@@ -1622,7 +1616,6 @@ uint8_t icm_encrypt(uint32_t length) {
         // 0. check in OCM
 
         uint32_t id = icm_find(base + 4);
-        
 #ifdef ICM_DEBUG
         {
           icm_debug("OCM key check", 13);
@@ -1631,7 +1624,7 @@ uint8_t icm_encrypt(uint32_t length) {
         }
 #endif
         uint32_t pool_id = icm_temp_storage->pool.head[id];
-        if (icm_temp_storage->valid[id] && pool_id != 0xffffffff) {
+        if (icm_temp_storage->valid[id]) {
           ICMStorageItem* item = &(icm_temp_storage->pool.pool[pool_id]);
           // found, do not send output request
           memcpy(icm_raw_data_base, base, 4 + 32);
