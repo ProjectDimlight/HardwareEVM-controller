@@ -9,6 +9,9 @@
 
 // #define ICM_DEBUG
 
+#define QUERY_HISTORY_SIZE 256
+#define QUERY_HISTORY_SLOTS 4096
+
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
 typedef uint8_t *address_p;
@@ -148,6 +151,15 @@ typedef struct {
   uint32_t count_storage_records;
   uint8_t frame_depth;
 
+  ////////////////////////////////////////////
+
+  uint32_t count_query_history;
+  uint32_t query_history_recorder_last_id, query_history_recorder_cur_id;
+  uint8_t  query_history_record_valid[4096];
+  uint32_t query_history_head[256], query_history_next[4096];
+  uint32_t chosen_dummy_sequences[16];
+  uint32_t chosen_dummy_count;
+  uint32_t chosen_dummy_id;
 } ICMConfig;
 
 typedef struct {
