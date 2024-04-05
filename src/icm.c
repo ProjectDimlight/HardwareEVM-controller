@@ -136,6 +136,31 @@ void clearBalance() {
 
 ///////////////////////////////////////////////////////////////////
 
+// 
+
+///////////////////////////////////////////////////////////////////
+
+// Dummy
+
+void icm_clear_query_history() {
+
+}
+
+void icm_record_query_history() {
+  // if there is insufficient history storage
+  // remove a random record
+}
+
+void icm_init_dummy_() {
+  
+}
+
+void icm_generate_dummy() {
+  
+}
+
+///////////////////////////////////////////////////////////////////
+
 uint32_t page_length(uint32_t length) {
   return PAGES(length) << PAGE_ADDR_W;
 }
