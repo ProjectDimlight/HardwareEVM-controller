@@ -2,7 +2,6 @@
 #include "evm_controller.h"
 #include "icm_keys.h"
 
-#define NUMBER_OF_DUMMIES 127
 #define PAGE_SIZE 1024
 #define PAGE_ADDR_W 10
 #define PAGE_SIGN_W 5
@@ -25,6 +24,7 @@ uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_return_tmp[16 * PAGE_SIZE];
 uint8_t icm_ram_deployed_code[1024 * PAGE_SIZE];
 uint8_t zero_page[PAGE_SIZE];
+ICMQueryHistoryCipher icm_query_history_cipher[4096];
 
 ///////////////////////////////////////////////////////////////////
 
@@ -136,27 +136,206 @@ void clearBalance() {
 
 ///////////////////////////////////////////////////////////////////
 
-// 
+// Random
+
+void icm_init_random() {
+  icm_config->last_random[0] = 114514;
+  icm_config->last_random[1] = 0x114514;
+  icm_config->last_random[2] = 1919810;
+  icm_config->last_random[3] = 0x1919810;
+}
+
+void icm_random(int from, int to) {
+  uint32_t range = to - from;
+  uint32_t pow2 = 1;
+  while (pow2 < range) pow2 <<= 1;
+  pow2 -= 1;
+  
+  int origin = last_random[2] * last_random[0] - last_random[1];
+  int res ^= 1u << (last_random[3] & 31);
+
+  last_random[3] = last_random[2];
+  last_random[2] = last_random[1];
+  last_random[1] = last_random[0];
+  last_random[0] = res;
+
+  res &= pow2;
+  while (res > range) {
+    res -= range;
+  }
+  res += from;
+  return res;
+}
+
+void icm_random_multiple_unique(int output[], int count, int from, int to, int valid[]) {
+  for (int i = 0; i < count; i++) {
+    int id, not_unique = false;
+    while (1) {
+      id = icm_random(from, to);
+      if (valid[id] == -1) {
+        continue;
+      }
+
+      for (int j = 0; j < i; j++) 
+        if (output[j] == id) {
+          not_unique = true;
+          break;
+        }
+
+      if (!not_unique) {
+        output[i] = id;
+        break;
+      }
+    }
+  }
+}
 
 ///////////////////////////////////////////////////////////////////
 
 // Dummy
 
 void icm_clear_query_history() {
+  icm_init_random();
 
+  // init history
+  icm_config->count_query_history = 0;
+  memset(icm_config->query_history_valid, 0, sizeof(icm_config->query_history_valid));
+
+  // init recorder
+  icm_config->query_history_recorder_last_id = -1;
+  icm_config->query_history_recorder_seq = -1;
+  memset(icm_config->query_history_head, -1, sizeof(icm_config->query_history_head));
+  icm_config->query_history_free_head = -1;
+
+  for (int i = 0; i < QUERY_HISTORY_SLOTS; i++) {
+    icm_config->query_history_next[i] = icm_config->query_history_free_head;
+    icm_config->query_history_free_head = i;
+  }
 }
 
-void icm_record_query_history() {
+void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
+  icm_config->current_query_history_length ++;
+
   // if there is insufficient history storage
   // remove a random record
+  if (icm_config->query_history_free_head == -1) {
+    int remove_id;
+    icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
+    icm_config->query_history_valid[remove_id] = 0;
+    icm_config->query_history_free_head = query_history_head[remove_id];
+    icm_config->query_history_head[remove_id] = -1;
+
+    icm_config->query_history_deleted[icm_config->query_history_deleted_sp ++] = remove_id;
+  }
+
+  // get a empty item from free link
+  id = icm_config->query_history_free_head;
+  icm_config->query_history_free_head = icm_config->query_history_next[icm_config->query_history_free_head];
+  icm_config->query_history_next[id] = -1;
+
+  // insert it to the tail
+  if (icm_config->query_history_head[icm_config->query_history_recorder_seq]) {
+    icm_config->query_history_next[icm_config->query_history_recorder_last_record_id] = id;
+  } else {
+    icm_config->query_history_head[icm_config->query_history_recorder_seq] = id;
+  }
+  icm_config->query_history_recorder_last_record_id = id;
+
+  // memorize the values
+  uint8_t tmp[64];
+  memcpy(tmp, &type, 1);
+  memcpy(tmp + 4, address, 20);
+  memcpy(tmp + 4 + 20, key, 32);
+  aes_encrypt(&icm_query_history_cipher[id], tmp, 4 + 20 + 32);
 }
 
-void icm_init_dummy_() {
-  
+void icm_init_dummy_generator() {
+  // stop the recording of the last tx
+  if (icm_config->query_history_recorder_last_id != -1) {
+    icm_config->query_history_next[icm_config->query_history_recorder_last_id] = -1;
+    icm_config->query_history_valid[icm_config->query_history_recorder_seq] = 1;
+  }
+
+  // start new record
+  if (icm_config->query_history_deleted_sp) {
+    icm_config->query_history_recorder_seq = icm_config->query_history_deleted[--icm_config->query_history_deleted_sp];
+  } else if (icm_config->count_query_history == QUERY_HISTORY_SIZE) {
+    int remove_id, i, j;
+    icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
+    icm_config->query_history_valid[remove_id] = 0;
+    for (j = -1, i = icm_config->query_history_head[remove_id]; i != -1; j = i, i = icm_config->query_history_next[i]);
+    if (j != -1) {
+      icm_config->query_history_next[j] = icm_config->query_history_free_head;
+    }
+    icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
+    icm_config->query_history_head[remove_id] = -1;
+
+    icm_config->query_history_recorder_seq = remove_id;
+  } else {
+    icm_config->query_history_recorder_seq = icm_config->count_query_history++;
+  }
+  icm_config->current_query_history_length = 0;
+
+  // select K dummy sequences
+  icm_config->chosen_dummy_number = icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp < NUMBER_OF_DUMMY_SEQS ? icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp : NUMBER_OF_DUMMY_SEQS;
+  icm_random_multiple_unique(icm_config->chosen_dummy_sequences, icm_config->chosen_dummy_number, 0, icm_config->count_query_history, icm_config->query_history_valid);
+  for (int i = 0; i < icm_config->chosen_dummy_number; i++) {
+    chosen_dummy_ids[i] = query_history_head[chosen_dummy_seq[i]];
+  }
 }
 
-void icm_generate_dummy() {
-  
+void icm_send_query(uint8_t type, int address[], int key[]) {
+  if (type == 0) {  // STORAGE
+    ECP *req = get_output_buffer();
+    ecp->opcode = SWAP;
+    ecp->src = STORAGE;
+    ecp->dest = HOST;
+    ecp->src_offset = 0;
+    ecp->dest_offset = 0;
+    ecp->length = 8 + 20 + 32;
+    *(uint32_t*)req->data = 0;
+    *(uint32_t*)(req->data + 4) = 1;
+
+    memcpy(req->data + 8, address, 20);
+    memcpy(req->data + 8 + 20, key, 32);
+    build_outgoing_packet(sizeof(ECP) + content_length);
+  } else {
+    ECP *req = get_output_buffer();
+    ecp->opcode = QUERY;
+    ecp->src = ENV;
+    ecp->dest = HOST;
+    ecp->func = type;
+    ecp->src_offset = 0;
+    ecp->dest_offset = 0;
+    ecp->length = 20;
+    memcpy(req->data, address, 20);
+    build_outgoing_packet(sizeof(ECP) + content_length);
+  }
+}
+
+void icm_send_query_with_dummy(uint8_t type, int address[], int key[]) {
+  int t = random(0, icm_config->chosen_dummy_number + 1);  // the place for the real
+  uint8_t tmp[64];
+
+  for (int i = 0; i < t; i ++) {
+    id = chosen_dummy_ids[i];
+    if (id == -1) continue;
+
+    aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
+    icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
+    chosen_dummy_ids[i] = query_history_next[id];
+  }
+
+  icm_send_query(type, address, key);
+
+  for (int i = t; i < icm_config->chosen_dummy_number; i++) {
+    id = chosen_dummy_ids[i];
+    if (id == -1) continue;
+
+    aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
+    icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
+    chosen_dummy_ids[i] = query_history_next[id];
+  }
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -541,6 +720,9 @@ void icm_init() {
   // Stack
   call_frame = icm_config->call_stack;
   icm_config->frame_depth = 0;
+
+  // Query history
+  icm_clear_query_history();
 }
 
 void icm_clear_storage() {
@@ -1361,6 +1543,8 @@ uint8_t icm_decrypt() {
     icm_debug("call", 4);
 #endif
 
+    icm_init_dummy_generator();
+
     // [TODO] check merkle proof of ENV values
 
     // check passed
@@ -1417,7 +1601,9 @@ uint8_t icm_decrypt() {
       // 1. if still not found, the host will check in plaintext global storage
       
       // responses of dummy requests should be discarded
-      if (memcmp(req->data + 4, icm_config->sload_real_key, sizeof(uint256_t))) {
+      if (icm_config->query_real_type != 0 || 
+          memcmp(req->data + 4, icm_config->query_real_address, sizeof(address_t)) ||
+          memcmp(req->data + 4 + 20, icm_config->sload_real_key, sizeof(uint256_t))) {
 #ifdef ICM_DEBUG
         icm_debug("dummy sload", 11);
 #endif
@@ -1533,8 +1719,14 @@ uint8_t icm_decrypt() {
         icm_debug("recv stack", 10);
         icm_debug(req->data + 4, 32);
 #endif
+        if (req->func != icm_config->query_real_type || memcmp(icm_config->query_real_address, req->data, 20)) {
+          icm_debug("dummy query", 11);
+          return 0;
+        }
+        req->func = 0;
+
         // [TODO] Length has to be 0 or 1
-        memcpy(icm_raw_data_base, req->data, req->length);
+        memcpy(icm_raw_data_base, req->data + 20, req->length - 20);
       } else if (req->dest == RETURNDATA && cesm_state == CESM_WAIT_FOR_PRECOMPILED_EXECUTION) {
 #ifdef ICM_DEBUG
         icm_debug("recv precompiled results", 24);
@@ -1585,8 +1777,15 @@ uint8_t icm_encrypt(uint32_t length) {
     }
 
     // plaintext params
-    memcpy(req->data, icm_raw_data_base, content_length);
-    build_outgoing_packet(sizeof(ECP) + content_length);
+    // memcpy(req->data, icm_raw_data_base, content_length);
+    // build_outgoing_packet(sizeof(ECP) + content_length);
+
+    icm_config->query_real_type = req->func;
+    memcpy(icm_config->query_real_address, icm_raw_data_base, 20);
+
+    icm_record_query(req->func, icm_raw_data_base, NULL);
+    icm_send_query_with_dummy(req->func, icm_raw_data_base, NULL);
+
     return 0;
   } else if (req->opcode == CALL) {
     icm_call(req->func);
@@ -1661,19 +1860,16 @@ uint8_t icm_encrypt(uint32_t length) {
         
         // 1. if still not found, generate plaintext dummy requests
         // record 
+        icm_config->query_real_type = 0;
+        memcpy(icm_config->query_real_address, call_frame->storage_address, sizeof(address_t));
         memcpy(icm_config->sload_real_key, base + 4, sizeof(uint256_t));
 
         // since the swapped-out record has been saved in phase 0
         // we are not sending it again, instead set the output num_of_items to 0
-        *(uint32_t*)req->data = 0;
-        *(uint32_t*)(req->data + 4) = 1;
-        req->length = 8 + 32;
-        content_length = 8 + 32;
 
-        // [TODO] send dummy requests
-        memcpy(req->data + 8, base + 4, 32);
-        // set_retry_send();
-        build_outgoing_packet(sizeof(ECP) + content_length);
+        icm_record_query(0, call_frame->storage_address, base + 4);
+        icm_send_query_with_dummy(0, call_frame->storage_address, base + 4);
+        // icm_send_query_with_dummy(base + 4);
         return 0;
       }
     }
