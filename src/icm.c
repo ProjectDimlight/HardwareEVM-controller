@@ -65,7 +65,6 @@ uint32_t icm_find(uint256_t key) {
 
   if (cnt == storage_prime) {
     icm_dump_storage();
-    icm_debug("storage dump", 12);
     return icm_find(key);
   }
   else
@@ -643,6 +642,15 @@ void icm_dump_storage() {
 
   build_outgoing_packet(sizeof(ECP) + content_length);
   memcpy(res, &tmp, sizeof(ECP));
+
+  // when storage pool is full with new modification, send all modification back to host
+  if (i == 0 && p->item_count) {
+    for (; i < p->item_count; i++) {
+	    uint32_t index = p->ordered_index[i];
+	    p->pool[index].depth = 0;
+    }
+    icm_dump_storage();
+  }
 }
 
 ///////////////////////////////////////////////////////////////////

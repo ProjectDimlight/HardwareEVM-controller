@@ -144,8 +144,6 @@ typedef struct {
 
   ////////////////////////////////////////////
 
-  // TODO: may delete this value ? same as count
-  uint32_t count_storage_records;
   uint8_t frame_depth;
 
 } ICMConfig;
@@ -188,7 +186,6 @@ typedef struct {
 
 extern void * const icm_raw_data_base         ;   // decrypted packet
 extern void * const icm_storage_history_base  ;   // storage history window for dummy request generation
-extern void * const icm_config_base           ;   // system configuration
 extern ICMTempStorage * const icm_temp_storage;
 extern ICMConfig      * const icm_config      ;
 

@@ -446,7 +446,7 @@ void evm_memory_copy(ECP *req) {
 }
 
 // uint16_t local_debug_counter = 0;
-// uint8_t local_debug_enable = 1;
+// uint8_t local_debug_enable = 0;
 // uint8_t ecp_debug_template[16] = {0x05, 0x00, 0x07};
 
 // void check_debug_buffer() {
@@ -478,11 +478,11 @@ void evm_memory_copy(ECP *req) {
 //   ((ECP*)get_output_buffer())->length = (offset << 2);
 //   icm_encrypt(sizeof(ECP) + (offset << 2));
 // }
-
-// void clear_debug_buffer() {
-//   uint16_t *debug_counter = (uint16_t*)(evm_cin_addr + 0xc);
-//   local_debug_counter = *debug_counter;
-// }
+//
+//void clear_debug_buffer() {
+//  uint16_t *debug_counter = (uint16_t*)(evm_cin_addr + 0xc);
+//  local_debug_counter = *debug_counter;
+//}
 
 uint8_t evm_has_output() {
   return evm_active && *(uint32_t*)evm_cout_addr != NONE;
@@ -498,7 +498,7 @@ void handle_ecp(ECP *in) {
 
   uint8_t ready = 0;
 
-  check_debug_buffer();
+//  check_debug_buffer();
 
 #ifdef ICM_DEBUG
   icm_debug(req, 16);
@@ -534,14 +534,14 @@ void handle_ecp(ECP *in) {
 #endif
       return;
     }
-    else if (req->opcode == DEBUG) {
-      clear_debug_buffer();
-      if (req->func == 2)
-        req->func = !local_debug_enable;
-      local_debug_enable = req->func;
-      *(uint8_t*)(evm_cin_addr + 8) = req->func;
-      return;
-    }
+//    else if (req->opcode == DEBUG) {
+//      clear_debug_buffer();
+//      if (req->func == 2)
+//        req->func = !local_debug_enable;
+//      local_debug_enable = req->func;
+//      *(uint8_t*)(evm_cin_addr + 8) = req->func;
+//      return;
+//    }
     else if (req->opcode == END){
       // this should not happen when hevm is correct
       // it is temporary added to restart hevm when it gets stuck
