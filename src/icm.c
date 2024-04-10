@@ -47,31 +47,6 @@ uint32_t icm_hash(address_t address, uint256_t key) {
   return hash;
 }
 
-// returns the index
-// if not found, return the first invalid (empty) element
-// for insertion, use this as the new index
-// for query, 
-uint32_t icm_find(uint256_t key) {
-  if (icm_temp_storage->pool.item_count == storage_prime)
-    icm_dump_storage();
-  uint32_t hash = icm_hash(call_frame->storage_address, key);
-  uint32_t cnt = 0;
-  for (;
-      cnt < storage_prime &&
-      icm_temp_storage->valid[hash] && (
-      memcmp(icm_temp_storage->record[hash].a, call_frame->storage_address, sizeof(address_t)) != 0 ||
-      memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
-    hash = ((hash == (storage_prime - 1)) ? 0 : (hash + 1)), cnt++);
-
-  if (cnt == storage_prime) {
-    icm_dump_storage();
-    icm_debug("storage dump", 12);
-    return icm_find(key);
-  }
-  else
-    return hash;
-}
-
 ///////////////////////////////////////////////////////////////////
 
 OCMBalance* getBalance(address_t addr) {
@@ -145,19 +120,18 @@ void icm_init_random() {
   icm_config->last_random[3] = 0x1919810;
 }
 
-void icm_random(int from, int to) {
+int icm_random(int from, int to) {
   uint32_t range = to - from;
   uint32_t pow2 = 1;
   while (pow2 < range) pow2 <<= 1;
   pow2 -= 1;
   
-  int origin = last_random[2] * last_random[0] - last_random[1];
-  int res ^= 1u << (last_random[3] & 31);
+  int res = 1u << (icm_config->last_random[3] & 31);
 
-  last_random[3] = last_random[2];
-  last_random[2] = last_random[1];
-  last_random[1] = last_random[0];
-  last_random[0] = res;
+  icm_config->last_random[3] = icm_config->last_random[2];
+  icm_config->last_random[2] = icm_config->last_random[1];
+  icm_config->last_random[1] = icm_config->last_random[0];
+  icm_config->last_random[0] = res;
 
   res &= pow2;
   while (res > range) {
@@ -167,9 +141,9 @@ void icm_random(int from, int to) {
   return res;
 }
 
-void icm_random_multiple_unique(int output[], int count, int from, int to, int valid[]) {
+void icm_random_multiple_unique(int16_t output[], int count, int from, int to, int8_t valid[]) {
   for (int i = 0; i < count; i++) {
-    int id, not_unique = false;
+    int id, not_unique = 0;
     while (1) {
       id = icm_random(from, to);
       if (valid[id] == -1) {
@@ -178,7 +152,7 @@ void icm_random_multiple_unique(int output[], int count, int from, int to, int v
 
       for (int j = 0; j < i; j++) 
         if (output[j] == id) {
-          not_unique = true;
+          not_unique = 1;
           break;
         }
 
@@ -188,6 +162,60 @@ void icm_random_multiple_unique(int output[], int count, int from, int to, int v
       }
     }
   }
+}
+
+///////////////////////////////////////////////////////////////////
+
+uint32_t padded_size(uint32_t size, uint32_t block_width) {
+  if (size == 0) return 0;
+  uint32_t number_of_blocks = (((size - 1) >> block_width) + 1);
+  return number_of_blocks << block_width;
+}
+
+void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef ENCRYPTION
+#ifdef ICM_DEBUG
+  icm_debug("decrypt", 7);
+#endif
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  size = padded_size(size, 4);
+  memcpy(out, in, size);
+  AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
+#ifdef ICM_DEBUG
+  icm_debug("decrypt finish", 14);
+#endif
+#else
+  memcpy(out, in, size);
+#endif
+}
+
+void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef ENCRYPTION
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  memcpy(out, in, size);
+  for (uint32_t i = size; i; i -= 32) {
+    AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out + i - 32, 32);
+  }
+#else
+  memcpy(out, in, size);
+#endif
+}
+
+uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef ENCRYPTION
+#ifdef ICM_DEBUG
+  icm_debug("encrypt", 7);
+#endif
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  size = padded_size(size, 4);
+  AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
+  if (out != in)
+    memcpy(out, in, size);
+  return size;
+#else
+  memcpy(out, in, size);
+  return size;
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -202,7 +230,7 @@ void icm_clear_query_history() {
   memset(icm_config->query_history_valid, 0, sizeof(icm_config->query_history_valid));
 
   // init recorder
-  icm_config->query_history_recorder_last_id = -1;
+  icm_config->query_history_recorder_last_record_id = -1;
   icm_config->query_history_recorder_seq = -1;
   memset(icm_config->query_history_head, -1, sizeof(icm_config->query_history_head));
   icm_config->query_history_free_head = -1;
@@ -219,17 +247,17 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
   // if there is insufficient history storage
   // remove a random record
   if (icm_config->query_history_free_head == -1) {
-    int remove_id;
+    int16_t remove_id;
     icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
     icm_config->query_history_valid[remove_id] = 0;
-    icm_config->query_history_free_head = query_history_head[remove_id];
+    icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
     icm_config->query_history_head[remove_id] = -1;
 
     icm_config->query_history_deleted[icm_config->query_history_deleted_sp ++] = remove_id;
   }
 
   // get a empty item from free link
-  id = icm_config->query_history_free_head;
+  int16_t id = icm_config->query_history_free_head;
   icm_config->query_history_free_head = icm_config->query_history_next[icm_config->query_history_free_head];
   icm_config->query_history_next[id] = -1;
 
@@ -251,8 +279,8 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
 
 void icm_init_dummy_generator() {
   // stop the recording of the last tx
-  if (icm_config->query_history_recorder_last_id != -1) {
-    icm_config->query_history_next[icm_config->query_history_recorder_last_id] = -1;
+  if (icm_config->query_history_recorder_last_record_id != -1) {
+    icm_config->query_history_next[icm_config->query_history_recorder_last_record_id] = -1;
     icm_config->query_history_valid[icm_config->query_history_recorder_seq] = 1;
   }
 
@@ -260,7 +288,7 @@ void icm_init_dummy_generator() {
   if (icm_config->query_history_deleted_sp) {
     icm_config->query_history_recorder_seq = icm_config->query_history_deleted[--icm_config->query_history_deleted_sp];
   } else if (icm_config->count_query_history == QUERY_HISTORY_SIZE) {
-    int remove_id, i, j;
+    int16_t remove_id, i, j;
     icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
     icm_config->query_history_valid[remove_id] = 0;
     for (j = -1, i = icm_config->query_history_head[remove_id]; i != -1; j = i, i = icm_config->query_history_next[i]);
@@ -278,63 +306,63 @@ void icm_init_dummy_generator() {
 
   // select K dummy sequences
   icm_config->chosen_dummy_number = icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp < NUMBER_OF_DUMMY_SEQS ? icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp : NUMBER_OF_DUMMY_SEQS;
-  icm_random_multiple_unique(icm_config->chosen_dummy_sequences, icm_config->chosen_dummy_number, 0, icm_config->count_query_history, icm_config->query_history_valid);
+  icm_random_multiple_unique(icm_config->chosen_dummy_seq, icm_config->chosen_dummy_number, 0, icm_config->count_query_history, icm_config->query_history_valid);
   for (int i = 0; i < icm_config->chosen_dummy_number; i++) {
-    chosen_dummy_ids[i] = query_history_head[chosen_dummy_seq[i]];
+    icm_config->chosen_dummy_ids[i] = icm_config->query_history_head[icm_config->chosen_dummy_seq[i]];
   }
 }
 
 void icm_send_query(uint8_t type, int address[], int key[]) {
   if (type == 0) {  // STORAGE
     ECP *req = get_output_buffer();
-    ecp->opcode = SWAP;
-    ecp->src = STORAGE;
-    ecp->dest = HOST;
-    ecp->src_offset = 0;
-    ecp->dest_offset = 0;
-    ecp->length = 8 + 20 + 32;
+    req->opcode = SWAP;
+    req->src = STORAGE;
+    req->dest = HOST;
+    req->src_offset = 0;
+    req->dest_offset = 0;
+    req->length = 8 + 20 + 32;
     *(uint32_t*)req->data = 0;
     *(uint32_t*)(req->data + 4) = 1;
 
     memcpy(req->data + 8, address, 20);
     memcpy(req->data + 8 + 20, key, 32);
-    build_outgoing_packet(sizeof(ECP) + content_length);
+    build_outgoing_packet(sizeof(ECP) + 60);
   } else {
     ECP *req = get_output_buffer();
-    ecp->opcode = QUERY;
-    ecp->src = ENV;
-    ecp->dest = HOST;
-    ecp->func = type;
-    ecp->src_offset = 0;
-    ecp->dest_offset = 0;
-    ecp->length = 20;
+    req->opcode = QUERY;
+    req->src = ENV;
+    req->dest = HOST;
+    req->func = type;
+    req->src_offset = 0;
+    req->dest_offset = 0;
+    req->length = 20;
     memcpy(req->data, address, 20);
-    build_outgoing_packet(sizeof(ECP) + content_length);
+    build_outgoing_packet(sizeof(ECP) + 60);
   }
 }
 
 void icm_send_query_with_dummy(uint8_t type, int address[], int key[]) {
-  int t = random(0, icm_config->chosen_dummy_number + 1);  // the place for the real
+  int t = icm_random(0, icm_config->chosen_dummy_number + 1);  // the place for the real
   uint8_t tmp[64];
 
   for (int i = 0; i < t; i ++) {
-    id = chosen_dummy_ids[i];
+    uint16_t id = icm_config->chosen_dummy_ids[i];
     if (id == -1) continue;
 
     aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
-    chosen_dummy_ids[i] = query_history_next[id];
+    icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
   }
 
   icm_send_query(type, address, key);
 
   for (int i = t; i < icm_config->chosen_dummy_number; i++) {
-    id = chosen_dummy_ids[i];
+    int16_t id = icm_config->chosen_dummy_ids[i];
     if (id == -1) continue;
 
     aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
-    chosen_dummy_ids[i] = query_history_next[id];
+    icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
   }
 }
 
@@ -549,60 +577,6 @@ void icm_stack_pop() {
 
 // CALL: stack_push, memcpy (last.mem -> this.input), run
 // END:  memcpy (this.mem -> returndata_tmp) , stack_pop, memcpy (returndata_tmp -> this.mem), resume
-
-///////////////////////////////////////////////////////////////////
-
-uint32_t padded_size(uint32_t size, uint32_t block_width) {
-  if (size == 0) return 0;
-  uint32_t number_of_blocks = (((size - 1) >> block_width) + 1);
-  return number_of_blocks << block_width;
-}
-
-void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-#ifdef ENCRYPTION
-#ifdef ICM_DEBUG
-  icm_debug("decrypt", 7);
-#endif
-  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  size = padded_size(size, 4);
-  memcpy(out, in, size);
-  AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
-#ifdef ICM_DEBUG
-  icm_debug("decrypt finish", 14);
-#endif
-#else
-  memcpy(out, in, size);
-#endif
-}
-
-void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
-#ifdef ENCRYPTION
-  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  memcpy(out, in, size);
-  for (uint32_t i = size; i; i -= 32) {
-    AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out + i - 32, 32);
-  }
-#else
-  memcpy(out, in, size);
-#endif
-}
-
-uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
-#ifdef ENCRYPTION
-#ifdef ICM_DEBUG
-  icm_debug("encrypt", 7);
-#endif
-  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
-  size = padded_size(size, 4);
-  AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
-  if (out != in)
-    memcpy(out, in, size);
-  return size;
-#else
-  memcpy(out, in, size);
-  return size;
-#endif
-}
 
 ///////////////////////////////////////////////////////////////////
 
@@ -850,6 +824,31 @@ void icm_dump_storage() {
 
   build_outgoing_packet(sizeof(ECP) + content_length);
   memcpy(res, &tmp, sizeof(ECP));
+}
+
+// returns the index
+// if not found, return the first invalid (empty) element
+// for insertion, use this as the new index
+// for query, 
+uint32_t icm_find(uint256_t key) {
+  if (icm_temp_storage->pool.item_count == storage_prime)
+    icm_dump_storage();
+  uint32_t hash = icm_hash(call_frame->storage_address, key);
+  uint32_t cnt = 0;
+  for (;
+      cnt < storage_prime &&
+      icm_temp_storage->valid[hash] && (
+      memcmp(icm_temp_storage->record[hash].a, call_frame->storage_address, sizeof(address_t)) != 0 ||
+      memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
+    hash = ((hash == (storage_prime - 1)) ? 0 : (hash + 1)), cnt++);
+
+  if (cnt == storage_prime) {
+    icm_dump_storage();
+    icm_debug("storage dump", 12);
+    return icm_find(key);
+  }
+  else
+    return hash;
 }
 
 ///////////////////////////////////////////////////////////////////
