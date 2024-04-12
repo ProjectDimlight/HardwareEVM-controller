@@ -207,6 +207,7 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
     icm_debug(&call_frame->pc, 4);
     icm_debug(&call_frame->msize, 4);
     icm_debug(&call_frame->gas, 8);
+    icm_debug(&call_frame->memory_length, 4);
 #endif
 
     // does not update stack size, because it has been cleared while dumping out stack elements
@@ -219,18 +220,10 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   }
 
 #ifdef ICM_DEBUG
-  icm_debug("sign pointers", 13);
-  icm_debug(&(call_frame->stack_sign), 4);
-  icm_debug(&(call_frame->memory_sign), 4);
-  icm_debug(&(call_frame->sign_top), 4);
   icm_debug("pc msize gas load", 17);
 #endif
   
   // create a new frame
-  if (call_frame == &icm_config->call_stack[63]) {
-    icm_debug("frame overflow", 14);
-  }
-
   void *base = call_frame->top;
   void *sign_base = call_frame->sign_top;
 
@@ -265,6 +258,16 @@ void icm_stack_push(address_t callee_address, address_p callee_storage_address, 
   call_frame->input_mark  = call_frame->input_sign  + sign_length(input_length);
   call_frame->stack_sign  = call_frame->input_mark  + mark_length(input_length);
   call_frame->memory_sign = call_frame->stack_sign  + 32;
+  
+#ifdef ICM_DEBUG
+  icm_debug("new layer size", 14);
+  icm_debug(&code_length, 4);
+  icm_debug(&input_length, 4);
+  icm_debug("sign pointers", 13);
+  icm_debug(&(sign_base), 4);
+  icm_debug(&(call_frame->stack_sign), 4);
+  icm_debug(&(call_frame->memory_sign), 4);
+#endif
 
   if (call_frame->memory_sign >= icm_config->icm_ocm_return_sign_tmp)
     icm_debug("sign overflow", 13);
@@ -1424,7 +1427,7 @@ uint8_t icm_decrypt() {
 
 #ifdef ICM_DEBUG
         icm_debug(&(icm_temp_storage->record[id].k), 32);
-        icm_debug(&(icm_temp_storage->record[id].v), 32);
+        // icm_debug(&(icm_temp_storage->record[id].v), 32);
 #endif
       }
 
@@ -1591,7 +1594,7 @@ uint8_t icm_encrypt(uint32_t length) {
 
 #ifdef ICM_DEBUG
           icm_debug(&(icm_temp_storage->record[id].k), 32);
-          icm_debug(&(icm_temp_storage->record[id].v), 32);
+          // icm_debug(&(icm_temp_storage->record[id].v), 32);
 #endif
         }
 
@@ -1668,6 +1671,11 @@ uint8_t icm_encrypt(uint32_t length) {
           // sent as plain text
           call_frame->num_of_params = call_frame->stack_size = *(uint32_t*)icm_raw_data_base;
           memcpy(call_frame->stack, icm_raw_data_base + 4, content_length - 4);
+
+          icm_debug("stack item", 10);
+          for (int i = 0, j = 4; i < call_frame->num_of_params; i++, j += 32) {
+            icm_debug(icm_raw_data_base + j, 32);
+          }
         } else {
 #ifdef SIGNATURE
           // sign entire stack (except params)

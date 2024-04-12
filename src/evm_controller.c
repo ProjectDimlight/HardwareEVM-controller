@@ -712,6 +712,12 @@ void handle_ecp(ECP *in) {
     // COPY stack
     // the call params should remain as plaintext
     uint32_t num_of_params = num_of_call_params[req->func & 0xf];
+
+    icm_debug("buffer origin", 13);
+    for (int i = 0, j = 4; i < num_of_params; i++, j += 32) {
+      icm_debug(icm_raw_data_base + j, 32);
+    }
+
     buf->opcode = COPY;
     buf->src = STACK;
     buf->dest = HOST;
