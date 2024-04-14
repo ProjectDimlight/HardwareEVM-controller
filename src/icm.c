@@ -19,7 +19,6 @@
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
 ICMTempStorage * const icm_temp_storage = (ICMTempStorage*)0xFFFC8000ll;
 ICMConfig      * const icm_config       = (ICMConfig*)0xFFFD0000ll;
-void * const icm_temp_storage_base      = (void*)0xFFFE0000ll;   // temporary storage
 
 uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_return_tmp[16 * PAGE_SIZE];
@@ -603,10 +602,10 @@ void icm_dump_storage() {
   uint32_t count = p->item_count, content_length = 4, i = 0;
   
   for (; i < p->item_count; i++) {
-	  uint32_t index = p->ordered_index[i];
+	uint32_t index = p->ordered_index[i];
     if (p->pool[index].depth) break;
-    memcpy(icm_temp_storage_base + content_length, &(icm_temp_storage->record[p->bel[index]]), sizeof(ICMStorageRecord)), content_length += sizeof(ICMStorageRecord);
-    memcpy(icm_temp_storage_base + content_length, &(p->pool[index].v), sizeof(uint256_t)), content_length += sizeof(uint256_t);
+    memcpy(icm_raw_data_base + content_length, &(icm_temp_storage->record[p->bel[index]]), sizeof(ICMStorageRecord)), content_length += sizeof(ICMStorageRecord);
+    memcpy(icm_raw_data_base + content_length, &(p->pool[index].v), sizeof(uint256_t)), content_length += sizeof(uint256_t);
     icm_del_storage_item(p, index), p->pos[--count] = index;
   }
   for (uint32_t j = i; j < p->item_count; j++)
@@ -616,7 +615,7 @@ void icm_dump_storage() {
   if (!icm_config->integrity_valid)
     count += 10001;
 #endif
-  *(uint32_t*)icm_temp_storage_base = i;
+  *(uint32_t*)icm_raw_data_base = i;
   res->length = content_length;
 
 #ifdef ENCRYPTION
@@ -627,11 +626,11 @@ void icm_dump_storage() {
 
 #ifdef SIGNATURE
   // the signature is calculated over plaintext
-  ecdsa_sign(res->data + sign_offset, icm_temp_storage_base, content_length, STORAGE, 0, icm_config->hevm_priv);
+  ecdsa_sign(res->data + sign_offset, icm_raw_data_base, content_length, STORAGE, 0, icm_config->hevm_priv);
 #endif
 
   // encrypt storage elements
-  aes_encrypt(res->data, icm_temp_storage_base, content_length);
+  aes_encrypt(res->data, icm_raw_data_base, content_length);
   // memcpy(res->data, icm_raw_data_base, content_length);
 
 #ifdef SIGNATURE
@@ -641,7 +640,6 @@ void icm_dump_storage() {
 #endif
 
   build_outgoing_packet(sizeof(ECP) + content_length);
-  memcpy(res, &tmp, sizeof(ECP));
 
   // when storage pool is full with new modification, send all modification back to host
   if (i == 0 && p->item_count) {
@@ -651,6 +649,8 @@ void icm_dump_storage() {
     }
     icm_dump_storage();
   }
+
+  memcpy(res, &tmp, sizeof(ECP));
 }
 
 ///////////////////////////////////////////////////////////////////
