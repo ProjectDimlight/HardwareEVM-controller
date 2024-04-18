@@ -803,7 +803,7 @@ void icm_end(uint8_t func) {
   icm_config->immutable_page_sign = icm_config->icm_ocm_return_sign_tmp;
   icm_config->icm_ocm_return_has_sign = 1;
 
-  if (func == OP_RETURN || func == OP_REVERT || func == OP_INVALID) {
+  if (func == OP_RETURN || func == OP_REVERT) {
     icm_config->cesm_ready = 0;
 
     ECP ecp;
@@ -1546,26 +1546,35 @@ uint8_t icm_encrypt(uint32_t length) {
     build_outgoing_packet(length);
     return 1;
   } else if (req->opcode == QUERY) {
-    OCMDeployedCodeFrame *p = icm_find_locally_deployed_contract_code(icm_raw_data_base);
-    if (p) {
-      if (req->func == ExtCodeSize) {    // ExtCodeSize
-        memcpy(icm_raw_data_base, &(p->length), 4);
-        memset(icm_raw_data_base + 4, 0, sizeof(uint256_t) - 4);
-#ifdef ICM_DEBUG
-        icm_debug("found locally", 13);
-        icm_debug(icm_raw_data_base, 32);
-#endif
-        return 1;
+    if (req->func == ExtCodeSize || req->func == ExtCodeHash) {
+      OCMDeployedCodeFrame *p = icm_find_locally_deployed_contract_code(icm_raw_data_base);
+      if (p) {
+        if (req->func == ExtCodeSize) {    // ExtCodeSize
+          memcpy(icm_raw_data_base, &(p->length), 4);
+          memset(icm_raw_data_base + 4, 0, sizeof(uint256_t) - 4);
+  #ifdef ICM_DEBUG
+          icm_debug("found locally", 13);
+          icm_debug(icm_raw_data_base, 32);
+  #endif
+          return 1;
+        }
+        else if (req->func == ExtCodeHash) { // ExtCodeHash
+          memcpy(icm_raw_data_base, p->code_hash, 32);
+  #ifdef ICM_DEBUG
+          icm_debug("found locally", 13);
+          icm_debug(icm_raw_data_base, 32);
+  #endif
+          return 1;
+        }
       }
-      else if (req->func == ExtCodeHash) { // ExtCodeHash
-        memcpy(icm_raw_data_base, p->code_hash, 32);
-#ifdef ICM_DEBUG
-        icm_debug("found locally", 13);
-        icm_debug(icm_raw_data_base, 32);
-#endif
+    } else if (req->func == Balance) {
+      OCMBalance* b = getBalance(icm_raw_data_base);
+      if (b) {
+        memcpy(icm_raw_data_base, b->balance, sizeof(uint256_t));
         return 1;
       }
     }
+    
 
     // plaintext params
     memcpy(req->data, icm_raw_data_base, content_length);
