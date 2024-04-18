@@ -58,6 +58,7 @@ enum CallEndFunc {
   OP_CREATE2,
   OP_STATICCALL = 0x1a,
   OP_REVERT = 0x1d,
+  OP_INVALID = 0x1e,
   OP_SELFDESTRUCT = 0x1f
 };
 

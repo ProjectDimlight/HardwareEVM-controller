@@ -803,7 +803,7 @@ void icm_end(uint8_t func) {
   icm_config->immutable_page_sign = icm_config->icm_ocm_return_sign_tmp;
   icm_config->icm_ocm_return_has_sign = 1;
 
-  if (func == OP_RETURN || func == OP_REVERT) {
+  if (func == OP_RETURN || func == OP_REVERT || func == OP_INVALID) {
     icm_config->cesm_ready = 0;
 
     ECP ecp;
@@ -1133,7 +1133,7 @@ void icm_call_end_state_machine() {
     uint32_t frame_st = p->item_count, tmp = p->item_count;
     while(frame_st && p->pool[p->ordered_index[frame_st - 1]].depth == icm_config->frame_depth) frame_st--;
     // handle storage update, revert(delete) all the storage modification with this depth
-    if (end_func == OP_REVERT || end_func == OP_STATICCALL) {
+    if (end_func == OP_REVERT || end_func == OP_STATICCALL || end_func == OP_INVALID) {
       for (; frame_st < tmp; frame_st++) {
         icm_del_storage_item(p, p->ordered_index[frame_st]);
         p->pos[--p->item_count] = p->ordered_index[frame_st];
@@ -1216,7 +1216,7 @@ void icm_call_end_state_machine() {
     } else {
       // set success
       memset(icm_raw_data_base + 4, 0, 32);
-      *(uint8_t*)(icm_raw_data_base + 4) = (call_frame + 1)->call_end_func != OP_REVERT;
+      *(uint8_t*)(icm_raw_data_base + 4) = ((call_frame + 1)->call_end_func != OP_REVERT && (call_frame + 1)->call_end_func != OP_INVALID);
     }
     aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * (new_stack_size - 1));
 #ifdef ICM_DEBUG
