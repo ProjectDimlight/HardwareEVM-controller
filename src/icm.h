@@ -9,6 +9,10 @@
 
 // #define ICM_DEBUG
 
+#define NUMBER_OF_DUMMY_SEQS 3
+#define QUERY_HISTORY_SIZE 256
+#define QUERY_HISTORY_SLOTS 8192
+
 typedef uint8_t uint256_t[32];
 typedef uint8_t address_t[20];
 typedef uint8_t *address_p;
@@ -95,6 +99,8 @@ typedef struct {
 
   ////////////////////////////////////////////
 
+  uint8_t query_real_type;
+  address_t query_real_address;
   uint256_t sload_real_key;
   
   ////////////////////////////////////////////
@@ -126,6 +132,11 @@ typedef struct {
   OCMBalance *local_balance_pointer;
 
   ////////////////////////////////////////////
+  // secure random
+
+  int last_random[4]; 
+
+  ////////////////////////////////////////////
 
   address_p contract_address_waiting_for_size;
   uint256_t contract_balance_after_transfer;
@@ -146,7 +157,19 @@ typedef struct {
 
   uint8_t frame_depth;
 
+  ////////////////////////////////////////////
+
+  int16_t count_query_history, current_query_history_length;
+  int16_t query_history_recorder_last_record_id, query_history_recorder_seq;
+  int8_t  query_history_valid[QUERY_HISTORY_SIZE];
+  int16_t query_history_deleted[QUERY_HISTORY_SIZE], query_history_deleted_sp;
+  int16_t query_history_head[QUERY_HISTORY_SIZE], query_history_free_head, query_history_next[QUERY_HISTORY_SLOTS];
+  int16_t chosen_dummy_seq[16];
+  int16_t chosen_dummy_number;
+  int16_t chosen_dummy_ids[16];
 } ICMConfig;
+
+typedef uint8_t ICMQueryHistoryCipher[64];
 
 typedef struct {
   uint256_t k;
