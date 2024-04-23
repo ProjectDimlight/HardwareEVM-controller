@@ -13,6 +13,7 @@
 
 #define ENCRYPTION
 #define SIGNATURE
+#define DUMMY
 
 // these address spaces are mapped to secure on chip memory
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
@@ -134,7 +135,7 @@ int icm_random(int from, int to) {
   icm_config->last_random[0] = res;
 
   res &= pow2;
-  while (res > range) {
+  while (res >= range) {
     res -= range;
   }
   res += from;
@@ -143,10 +144,11 @@ int icm_random(int from, int to) {
 
 void icm_random_multiple_unique(int16_t output[], int count, int from, int to, int8_t valid[]) {
   for (int i = 0; i < count; i++) {
-    int id, not_unique = 0;
+    int id, not_unique;
     while (1) {
+      not_unique = 0;
       id = icm_random(from, to);
-      if (valid[id] == -1) {
+      if (valid[id] == 0) {
         continue;
       }
 
@@ -222,6 +224,18 @@ uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
 
 // Dummy
 
+void icm_print_linked_list(int16_t seq) {
+  uint8_t tmp[80];
+  tmp[2] = tmp[3] = 0;
+
+  for (int16_t p = icm_config->query_history_head[seq]; p != -1; p = icm_config->query_history_next[p]) {
+    aes_decrypt(tmp + 4, &icm_query_history_cipher[p], 64);
+    *(int16_t*)tmp = p;
+
+    icm_debug(tmp, 68);
+  }
+}
+
 void icm_clear_query_history() {
   icm_init_random();
 
@@ -230,6 +244,7 @@ void icm_clear_query_history() {
   memset(icm_config->query_history_valid, 0, sizeof(icm_config->query_history_valid));
 
   // init recorder
+  icm_config->query_history_deleted_sp = 0;
   icm_config->query_history_recorder_last_record_id = -1;
   icm_config->query_history_recorder_seq = -1;
   memset(icm_config->query_history_head, -1, sizeof(icm_config->query_history_head));
@@ -247,11 +262,17 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
   // if there is insufficient history storage
   // remove a random record
   if (icm_config->query_history_free_head == -1) {
-    int16_t remove_id;
+	  icm_debug("record full", 11);
+
+    int16_t remove_id, i, j;
     icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
     icm_config->query_history_valid[remove_id] = 0;
-    icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
-    icm_config->query_history_head[remove_id] = -1;
+    for (j = -1, i = icm_config->query_history_head[remove_id]; i != -1; j = i, i = icm_config->query_history_next[i]);
+    if (j != -1) {
+      icm_config->query_history_next[j] = icm_config->query_history_free_head;
+      icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
+      icm_config->query_history_head[remove_id] = -1;
+    }
 
     icm_config->query_history_deleted[icm_config->query_history_deleted_sp ++] = remove_id;
   }
@@ -262,7 +283,7 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
   icm_config->query_history_next[id] = -1;
 
   // insert it to the tail
-  if (icm_config->query_history_head[icm_config->query_history_recorder_seq]) {
+  if (icm_config->query_history_head[icm_config->query_history_recorder_seq] != -1) {
     icm_config->query_history_next[icm_config->query_history_recorder_last_record_id] = id;
   } else {
     icm_config->query_history_head[icm_config->query_history_recorder_seq] = id;
@@ -271,9 +292,17 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
 
   // memorize the values
   uint8_t tmp[64];
-  memcpy(tmp, &type, 1);
+  tmp[0] = type;
+  tmp[1] = tmp[2] = tmp[3] = 0;
   memcpy(tmp + 4, address, 20);
   memcpy(tmp + 4 + 20, key, 32);
+
+#ifdef ICM_DEBUG
+  icm_debug("record", 6);
+  icm_debug(&id, 2);
+  icm_debug(tmp, 56);
+#endif
+
   aes_encrypt(&icm_query_history_cipher[id], tmp, 4 + 20 + 32);
 }
 
@@ -282,21 +311,26 @@ void icm_init_dummy_generator() {
   if (icm_config->query_history_recorder_last_record_id != -1) {
     icm_config->query_history_next[icm_config->query_history_recorder_last_record_id] = -1;
     icm_config->query_history_valid[icm_config->query_history_recorder_seq] = 1;
+#ifdef DEBUG
+    icm_print_linked_list(icm_config->query_history_recorder_seq);
+#endif
   }
 
   // start new record
   if (icm_config->query_history_deleted_sp) {
     icm_config->query_history_recorder_seq = icm_config->query_history_deleted[--icm_config->query_history_deleted_sp];
   } else if (icm_config->count_query_history == QUERY_HISTORY_SIZE) {
+	  icm_debug("seq full", 8);
+
     int16_t remove_id, i, j;
     icm_random_multiple_unique(&remove_id, 1, 0, icm_config->count_query_history, icm_config->query_history_valid);
     icm_config->query_history_valid[remove_id] = 0;
     for (j = -1, i = icm_config->query_history_head[remove_id]; i != -1; j = i, i = icm_config->query_history_next[i]);
     if (j != -1) {
       icm_config->query_history_next[j] = icm_config->query_history_free_head;
+      icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
+      icm_config->query_history_head[remove_id] = -1;
     }
-    icm_config->query_history_free_head = icm_config->query_history_head[remove_id];
-    icm_config->query_history_head[remove_id] = -1;
 
     icm_config->query_history_recorder_seq = remove_id;
   } else {
@@ -306,9 +340,22 @@ void icm_init_dummy_generator() {
 
   // select K dummy sequences
   icm_config->chosen_dummy_number = icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp < NUMBER_OF_DUMMY_SEQS ? icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp : NUMBER_OF_DUMMY_SEQS;
+
+#ifdef ICM_DEBUG
+  icm_debug("recorder", 8);
+  icm_debug(&icm_config->query_history_recorder_seq, 2);
+  icm_debug("dummies", 7);
+  icm_debug(&icm_config->chosen_dummy_number, 2);
+#endif
+
   icm_random_multiple_unique(icm_config->chosen_dummy_seq, icm_config->chosen_dummy_number, 0, icm_config->count_query_history, icm_config->query_history_valid);
+
+
   for (int i = 0; i < icm_config->chosen_dummy_number; i++) {
     icm_config->chosen_dummy_ids[i] = icm_config->query_history_head[icm_config->chosen_dummy_seq[i]];
+#ifdef ICM_DEBUG
+    icm_debug(&icm_config->chosen_dummy_seq[i], 2);
+#endif
   }
 }
 
@@ -345,21 +392,34 @@ void icm_send_query_with_dummy(uint8_t type, int address[], int key[]) {
   int t = icm_random(0, icm_config->chosen_dummy_number + 1);  // the place for the real
   uint8_t tmp[64];
 
+#ifdef ICM_DEBUG
+  icm_debug("send", 4);
+#endif
+
   for (int i = 0; i < t; i ++) {
     uint16_t id = icm_config->chosen_dummy_ids[i];
     if (id == -1) continue;
 
+#ifdef ICM_DEBUG
+    icm_debug("dummy", 5);
+#endif
     aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
     icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
   }
 
+#ifdef ICM_DEBUG
+  icm_debug("real", 4);
+#endif
   icm_send_query(type, address, key);
 
   for (int i = t; i < icm_config->chosen_dummy_number; i++) {
     int16_t id = icm_config->chosen_dummy_ids[i];
     if (id == -1) continue;
 
+#ifdef ICM_DEBUG
+    icm_debug("dummy", 5);
+#endif
     aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
     icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
@@ -1542,7 +1602,9 @@ uint8_t icm_decrypt() {
     icm_debug("call", 4);
 #endif
 
+#ifdef DUMMY
     icm_init_dummy_generator();
+#endif
 
     // [TODO] check merkle proof of ENV values
 
@@ -1599,6 +1661,7 @@ uint8_t icm_decrypt() {
       //    which is processed locally and will never go through this function
       // 1. if still not found, the host will check in plaintext global storage
       
+#ifdef DUMMY
       // responses of dummy requests should be discarded
       if (icm_config->query_real_type != 0 || 
           memcmp(req->data + 4, icm_config->query_real_address, sizeof(address_t)) ||
@@ -1608,6 +1671,12 @@ uint8_t icm_decrypt() {
 #endif
         return 0;
       }
+#endif
+#ifdef ICM_DEBUG
+      icm_debug("real sload", 10);
+#endif
+
+      icm_config->query_real_type = 1;
 
       // plaintext need not decrypt
       memcpy(icm_raw_data_base, req->data, req->length);
@@ -1617,7 +1686,7 @@ uint8_t icm_decrypt() {
 
       void *base = icm_raw_data_base;
       uint32_t num_of_items = *(uint32_t*)base;
-      uint32_t offset = 4;
+      uint32_t offset = 4 + 20;
 
       for (uint32_t i = 0; i < num_of_items; i++, offset += 64) {
         uint32_t id = icm_find(base + offset);
@@ -1718,11 +1787,20 @@ uint8_t icm_decrypt() {
         icm_debug("recv stack", 10);
         icm_debug(req->data + 4, 32);
 #endif
+
+#ifdef DUMMY
         if (req->func != icm_config->query_real_type || memcmp(icm_config->query_real_address, req->data, 20)) {
+#ifdef ICM_DEBUG
           icm_debug("dummy query", 11);
+#endif
           return 0;
         }
+#endif
+#ifdef ICM_DEBUG
+        icm_debug("real query", 10);
+#endif
         req->func = 0;
+        icm_config->query_real_type = 1;
 
         // [TODO] Length has to be 0 or 1
         memcpy(icm_raw_data_base, req->data + 20, req->length - 20);
@@ -1778,12 +1856,15 @@ uint8_t icm_encrypt(uint32_t length) {
     // plaintext params
     // memcpy(req->data, icm_raw_data_base, content_length);
     // build_outgoing_packet(sizeof(ECP) + content_length);
-
+#ifdef DUMMY
     icm_config->query_real_type = req->func;
     memcpy(icm_config->query_real_address, icm_raw_data_base, 20);
 
     icm_record_query(req->func, icm_raw_data_base, NULL);
     icm_send_query_with_dummy(req->func, icm_raw_data_base, NULL);
+#else
+    icm_send_query(req->func, icm_raw_data_base, NULL);
+#endif
 
     return 0;
   } else if (req->opcode == CALL) {
@@ -1865,10 +1946,13 @@ uint8_t icm_encrypt(uint32_t length) {
 
         // since the swapped-out record has been saved in phase 0
         // we are not sending it again, instead set the output num_of_items to 0
-
+#ifdef DUMMY
         icm_record_query(0, call_frame->storage_address, base + 4);
         icm_send_query_with_dummy(0, call_frame->storage_address, base + 4);
         // icm_send_query_with_dummy(base + 4);
+#else
+        icm_send_query(0, call_frame->storage_address, base + 4);
+#endif
         return 0;
       }
     }
