@@ -779,7 +779,9 @@ void icm_init() {
   icm_config->frame_depth = 0;
 
   // Query history
+#ifdef DUMMY
   icm_clear_query_history();
+#endif
 }
 
 void icm_clear_storage() {
