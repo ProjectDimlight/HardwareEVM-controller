@@ -921,31 +921,6 @@ void icm_dump_storage() {
   memcpy(res, &tmp, sizeof(ECP));
 }
 
-// returns the index
-// if not found, return the first invalid (empty) element
-// for insertion, use this as the new index
-// for query, 
-uint32_t icm_find(uint256_t key) {
-  if (icm_temp_storage->pool.item_count == storage_prime)
-    icm_dump_storage();
-  uint32_t hash = icm_hash(call_frame->storage_address, key);
-  uint32_t cnt = 0;
-  for (;
-      cnt < storage_prime &&
-      icm_temp_storage->valid[hash] && (
-      memcmp(icm_temp_storage->record[hash].a, call_frame->storage_address, sizeof(address_t)) != 0 ||
-      memcmp(icm_temp_storage->record[hash].k, key, sizeof(uint256_t)) != 0);
-    hash = ((hash == (storage_prime - 1)) ? 0 : (hash + 1)), cnt++);
-
-  if (cnt == storage_prime) {
-    icm_dump_storage();
-    icm_debug("storage dump", 12);
-    return icm_find(key);
-  }
-  else
-    return hash;
-}
-
 ///////////////////////////////////////////////////////////////////
 
 void icm_code_hash(uint8_t *code_hash_output, uint8_t *code_page, uint32_t code_length) {
