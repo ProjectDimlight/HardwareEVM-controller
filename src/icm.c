@@ -24,7 +24,7 @@ uint8_t icm_ram_stack[4096 * PAGE_SIZE];
 uint8_t icm_ram_return_tmp[16 * PAGE_SIZE];
 uint8_t icm_ram_deployed_code[1024 * PAGE_SIZE];
 uint8_t zero_page[PAGE_SIZE];
-ICMQueryHistoryCipher icm_query_history_cipher[4096];
+ICMQueryHistoryCipher icm_query_history_cipher[QUERY_HISTORY_SLOTS];
 
 ///////////////////////////////////////////////////////////////////
 
@@ -137,6 +137,9 @@ void clearBalance() {
 
 // Random
 
+#define THE_PRIME 1000000007
+#define ANOTHER_PRIME 19260817
+
 void icm_init_random() {
   icm_config->last_random[0] = 114514;
   icm_config->last_random[1] = 0x114514;
@@ -150,7 +153,11 @@ int icm_random(int from, int to) {
   while (pow2 < range) pow2 <<= 1;
   pow2 -= 1;
   
-  int res = 1u << (icm_config->last_random[3] & 31);
+  int origin = icm_config->last_random[2] * ANOTHER_PRIME - icm_config->last_random[1];
+  int res = origin ^ (1u << (icm_config->last_random[3] & 31));
+
+  while (res < 0) res += THE_PRIME;
+  while (res >= THE_PRIME) res -= THE_PRIME;
 
   icm_config->last_random[3] = icm_config->last_random[2];
   icm_config->last_random[2] = icm_config->last_random[1];
@@ -280,6 +287,10 @@ void icm_clear_query_history() {
 }
 
 void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
+  if (icm_config->current_query_history_length >= 256) {
+    return;
+  }
+
   icm_config->current_query_history_length ++;
 
   // if there is insufficient history storage
@@ -362,7 +373,7 @@ void icm_init_dummy_generator() {
   icm_config->current_query_history_length = 0;
 
   // select K dummy sequences
-  icm_config->chosen_dummy_number = icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp < NUMBER_OF_DUMMY_SEQS ? icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp : NUMBER_OF_DUMMY_SEQS;
+  icm_config->chosen_dummy_number = icm_config->count_query_history - 1 - icm_config->query_history_deleted_sp < NUMBER_OF_DUMMY_SEQS + 3 ? 0 : NUMBER_OF_DUMMY_SEQS;
 
 #ifdef ICM_DEBUG
   icm_debug("recorder", 8);
@@ -370,6 +381,9 @@ void icm_init_dummy_generator() {
   icm_debug("dummies", 7);
   icm_debug(&icm_config->chosen_dummy_number, 2);
 #endif
+
+  int16_t top = icm_config->count_query_history;
+  top = (top == QUERY_HISTORY_SIZE || top == 0) ? top : top - 1;
 
   icm_random_multiple_unique(icm_config->chosen_dummy_seq, icm_config->chosen_dummy_number, 0, icm_config->count_query_history, icm_config->query_history_valid);
 
