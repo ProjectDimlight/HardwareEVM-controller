@@ -204,7 +204,7 @@ uint32_t padded_size(uint32_t size, uint32_t block_width) {
   return number_of_blocks << block_width;
 }
 
-void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+void aes_decrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
 #ifdef ICM_DEBUG
   icm_debug("decrypt", 7);
@@ -221,7 +221,11 @@ void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
 #endif
 }
 
-uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  memcpy(out, in, size);
+}
+
+uint32_t aes_encrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
 #ifdef ICM_DEBUG
   icm_debug("encrypt", 7);
@@ -236,6 +240,11 @@ uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
   memcpy(out, in, size);
   return size;
 #endif
+}
+
+uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  memcpy(out, in, size);
+  return size;
 }
 
 ///////////////////////////////////////////////////////////////////
