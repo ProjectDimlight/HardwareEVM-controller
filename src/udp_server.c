@@ -123,6 +123,7 @@ uint8_t *check_incoming_packet() {
 
 			// ack
 			pbuf_free(queue[expected_reply_id & 0x3f]);
+			queue[expected_reply_id & 0x3f] = 0;
 			expected_reply_id++;
 			retry_counter = 0;
 		}
