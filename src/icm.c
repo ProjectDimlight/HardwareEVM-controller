@@ -353,7 +353,7 @@ uint32_t padded_size(uint32_t size, uint32_t block_width) {
   return number_of_blocks << block_width;
 }
 
-void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+void aes_decrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
 #ifdef ICM_DEBUG
   icm_debug("decrypt", 7);
@@ -370,7 +370,11 @@ void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
 #endif
 }
 
-void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
+void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  memcpy(out, in, size);
+}
+
+void aes_decrypt_stack_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   memcpy(out, in, size);
@@ -382,7 +386,11 @@ void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
 #endif
 }
 
-uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
+  memcpy(out, in, size);
+}
+
+uint32_t aes_encrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
 #ifdef ICM_DEBUG
   icm_debug("encrypt", 7);
@@ -397,6 +405,11 @@ uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
   memcpy(out, in, size);
   return size;
 #endif
+}
+
+uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+  memcpy(out, in, size);
+  return size;
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -631,7 +644,7 @@ void icm_dump_storage() {
 #endif
 
   // encrypt storage elements
-  aes_encrypt(res->data, icm_temp_storage_base, content_length);
+  aes_encrypt_ext(res->data, icm_temp_storage_base, content_length);
   // memcpy(res->data, icm_raw_data_base, content_length);
 
 #ifdef SIGNATURE
@@ -1459,7 +1472,7 @@ uint8_t icm_decrypt() {
 
         // this page is encrypted
         if (req->func) {
-          aes_decrypt(icm_raw_data_base, req->data, req->length);
+          aes_decrypt_ext(icm_raw_data_base, req->data, req->length);
           char sign[64];
           memcpy(sign, req->data + req->length, 56);
 
@@ -1493,7 +1506,7 @@ uint8_t icm_decrypt() {
         icm_debug("recv input", 10);
         icm_debug(&req->dest_offset, 4);  
 #endif
-        aes_decrypt(icm_raw_data_base, req->data, req->length);
+        aes_decrypt_ext(icm_raw_data_base, req->data, req->length);
         char sign[64];
         memcpy(sign, req->data + req->length, 56);
         if (req->length < PAGE_SIZE) {
@@ -1807,9 +1820,9 @@ uint8_t icm_encrypt(uint32_t length) {
           }
 #endif
 
-          cipher_length = aes_encrypt(target_page + req->src_offset, icm_raw_data_base, content_length);
-
           if (end) {
+            cipher_length = aes_encrypt_ext(target_page + req->src_offset, icm_raw_data_base, content_length);
+
             // send out
             ECP *ecp = get_output_buffer();
             ecp->opcode = COPY;
@@ -1826,6 +1839,8 @@ uint8_t icm_encrypt(uint32_t length) {
 #endif
             build_outgoing_packet(sizeof(ECP) + cipher_length);
             return 1;
+          } else {
+            cipher_length = aes_encrypt(target_page + req->src_offset, icm_raw_data_base, content_length);
           }
         }
 
