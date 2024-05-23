@@ -92,6 +92,13 @@ void retry_send() {
 	icm_debug("retry send", 10);
 #endif
 		struct pbuf *p = queue[expected_reply_id & 0x3f]; // 256
+		if (p == 0) {
+			int t = 0;
+			while (1) {
+				t++;
+			}
+		}
+		
 		queue[expected_reply_id & 0x3f] = pbuf_clone(PBUF_TRANSPORT, PBUF_POOL, p);
 		udp_sendto(tpcb, p, &taddr, tport);
 		pbuf_free(p);
@@ -139,6 +146,13 @@ void build_outgoing_packet(uint32_t len) {
 	// struct pbuf *obuf = pbuf_alloc_reference(buf_out, len, PBUF_REF);
 	struct pbuf *obuf = NULL;
 	obuf = pbuf_alloc(PBUF_TRANSPORT, 4 + len, PBUF_POOL);
+
+	if (obuf == 0) {
+		int t = 0;
+		while (1) {
+			t++;
+		}
+	}
 	
 	uint8_t enable_reliable = 1, zero = 0;
 

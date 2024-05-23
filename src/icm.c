@@ -11,8 +11,8 @@
 #define call_frame (icm_config->call_frame_pointer)
 #define cesm_state (icm_config->cesm_current_state)
 
-//#define ENCRYPTION
-//#define SIGNATURE
+#define ENCRYPTION
+#define SIGNATURE
 #define DUMMY
 
 // these address spaces are mapped to secure on chip memory
@@ -1786,6 +1786,7 @@ uint8_t icm_decrypt() {
         icm_debug(&req->dest_offset, 4);  
 #endif
         aes_decrypt_ext(icm_raw_data_base, req->data, req->length);
+
         char sign[64];
         memcpy(sign, req->data + req->length, 56);
         if (req->length < PAGE_SIZE) {

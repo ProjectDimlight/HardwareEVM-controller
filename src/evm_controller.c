@@ -92,6 +92,7 @@ void dma_read_storage_slot(uint32_t index, void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 6;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
 }
@@ -101,6 +102,7 @@ void dma_write_storage_slot(uint32_t index, void* srcAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_storage_addr + (index << 6);
   *(uint32_t*)dma_length_addr = 1 << 6;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
@@ -110,6 +112,7 @@ void dma_read_storage_key(void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_storage_key;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = 1 << 5;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
 }
@@ -120,6 +123,7 @@ void dma_read_stack(uint32_t itemNum, void* dstAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dstAddr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
 }
@@ -130,6 +134,7 @@ void dma_write_stack(uint32_t itemNum, void* srcAddr) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)srcAddr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)evm_stack_addr;
   *(uint32_t*)dma_length_addr = itemNum << 5;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
@@ -140,6 +145,7 @@ void dma_read_mem(void* src_addr, void* dst_addr, uint32_t length) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x0;
   dma_wait();
 }
@@ -150,6 +156,7 @@ void dma_write_mem(void* src_addr, void* dst_addr, uint32_t length) {
   *(uint32_t*)dma_srcAddr_addr = (uint32_t)src_addr;
   *(uint32_t*)dma_destAddr_addr = (uint32_t)dst_addr;
   *(uint32_t*)dma_length_addr = length;
+  dma_wait();
   *(uint32_t*)dma_config_addr = 0x2;
   dma_wait();
 }
@@ -720,6 +727,7 @@ void handle_ecp(ECP *in) {
     buf->dest_offset = 0;
     buf->length = evm_store_stack(num_of_params);
     icm_encrypt(sizeof(ECP) + buf->length);
+
     // then the remaining content as cipher
     buf->opcode = COPY;
     buf->src = STACK;
