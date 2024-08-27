@@ -1,6 +1,7 @@
 #include "udp_server.h"
 #include "evm_controller.h"
 #include "icm_keys.h"
+#include "xtime_l.h"
 
 #define PAGE_SIZE 1024
 #define PAGE_ADDR_W 10
@@ -13,7 +14,34 @@
 
 #define ENCRYPTION
 #define SIGNATURE
-#define DUMMY
+// #define LOCAL_PROTECTION
+// #define DUMMY
+
+XTime total_time, start_time, end_time;
+uint8_t timing_mode;
+
+void icm_timing_continue() {
+  if (timing_mode == 0) {
+    timing_mode = 1;
+    XTime_GetTime(&start_time);
+  }
+}
+
+void icm_timing_pause() {
+  if (timing_mode == 1) {
+    XTime_GetTime(&end_time);
+    timing_mode = 0;
+    total_time += end_time - start_time;
+  }
+}
+
+void icm_timing_start() {
+  timing_mode = 0;
+  total_time = 0;
+  icm_timing_continue();
+}
+
+///////////////////////////////////////////////////////////////////
 
 // these address spaces are mapped to secure on chip memory
 void * const icm_raw_data_base          = (void*)0xFFFC0000ll;   // decrypted packet
@@ -206,30 +234,40 @@ uint32_t padded_size(uint32_t size, uint32_t block_width) {
 
 void aes_decrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
-#ifdef ICM_DEBUG
-  icm_debug("decrypt", 7);
-#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 4);
   memcpy(out, in, size);
   AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
-#ifdef ICM_DEBUG
-  icm_debug("decrypt finish", 14);
-#endif
 #else
   memcpy(out, in, size);
 #endif
 }
 
 void aes_decrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef LOCAL_PROTECTION
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  size = padded_size(size, 4);
   memcpy(out, in, size);
+  AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out, size);
+#else
+  memcpy(out, in, size);
+#endif
+}
+
+void aes_decrypt_stack(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef LOCAL_PROTECTION
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  memcpy(out, in, size);
+  for (uint32_t i = size; i; i -= 32) {
+    AES_CBC_decrypt_buffer(&(icm_config->aes_inst), out + i - 32, 32);
+  }
+#else
+  memcpy(out, in, size);
+#endif
 }
 
 uint32_t aes_encrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 #ifdef ENCRYPTION
-#ifdef ICM_DEBUG
-  icm_debug("encrypt", 7);
-#endif
   AES_ctx_set_iv(&(icm_config->aes_inst), iv);
   size = padded_size(size, 4);
   AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
@@ -243,8 +281,17 @@ uint32_t aes_encrypt_ext(uint8_t *out, uint8_t *in, uint32_t size) {
 }
 
 uint32_t aes_encrypt(uint8_t *out, uint8_t *in, uint32_t size) {
+#ifdef LOCAL_PROTECTION
+  AES_ctx_set_iv(&(icm_config->aes_inst), iv);
+  size = padded_size(size, 4);
+  AES_CBC_encrypt_buffer(&(icm_config->aes_inst), in, size);
+  if (out != in)
+    memcpy(out, in, size);
+  return size;
+#else
   memcpy(out, in, size);
   return size;
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -256,7 +303,7 @@ void icm_print_linked_list(int16_t seq) {
   tmp[2] = tmp[3] = 0;
 
   for (int16_t p = icm_config->query_history_head[seq]; p != -1; p = icm_config->query_history_next[p]) {
-    aes_decrypt(tmp + 4, &icm_query_history_cipher[p], 64);
+    aes_decrypt_ext(tmp + 4, &icm_query_history_cipher[p], 64);
     *(int16_t*)tmp = p;
 
     icm_debug(tmp, 68);
@@ -334,7 +381,7 @@ void icm_record_query(uint8_t type, uint8_t address[], uint8_t key[]) {
   icm_debug(tmp, 56);
 #endif
 
-  aes_encrypt(&icm_query_history_cipher[id], tmp, 4 + 20 + 32);
+  aes_encrypt_ext(&icm_query_history_cipher[id], tmp, 4 + 20 + 32);
 }
 
 void icm_init_dummy_generator() {
@@ -437,7 +484,7 @@ void icm_send_query_with_dummy(uint8_t type, int address[], int key[]) {
 #ifdef ICM_DEBUG
     icm_debug("dummy", 5);
 #endif
-    aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
+    aes_decrypt_ext(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
     icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
   }
@@ -454,7 +501,7 @@ void icm_send_query_with_dummy(uint8_t type, int address[], int key[]) {
 #ifdef ICM_DEBUG
     icm_debug("dummy", 5);
 #endif
-    aes_decrypt(tmp, &icm_query_history_cipher[id], 64);
+    aes_decrypt_ext(tmp, &icm_query_history_cipher[id], 64);
     icm_send_query(*(uint8_t*)tmp, tmp + 4, tmp + 4 + 20);
     icm_config->chosen_dummy_ids[i] = icm_config->query_history_next[id];
   }
@@ -687,14 +734,17 @@ void icm_stack_pop() {
 //    - dump-out storage: signed by fpga
 
 void hash_sign(uint8_t *out, uint8_t *data, uint32_t size, uint8_t type, uint64_t nonce, uint8_t *priv_key) {
+#ifdef LOCAL_PROTECTION
   keccak_256_init();
   keccak_256_update(data, size);
   keccak_256_update(&type, 1);
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(out);
+#endif
 }
 
 int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_t nonce, uint8_t *pub_key) {
+#ifdef LOCAL_PROTECTION
   uint8_t hash[32];
   keccak_256_init();
   keccak_256_update(data, size);
@@ -702,6 +752,9 @@ int hash_verify(uint8_t *in, uint8_t *data, uint32_t size, uint8_t type, uint64_
   keccak_256_update(&nonce, 8);
   keccak_256_finalize(hash);
   return memcmp(in, hash, 32) == 0;
+#else
+  return 1;
+#endif
 }
 
 void hash_sign_page(uint8_t *out, uint8_t *data, uint8_t src, uint32_t src_offset, uint64_t nonce, uint8_t *priv_key) {
@@ -999,6 +1052,8 @@ uint8_t address_is_precompiled(address_p address) {
 }
 
 void icm_switch_contract(address_p address, address_p storage_address, void *value) {
+  icm_timing_pause();
+
   icm_config->contract_address_waiting_for_size = address;
   ECP *ecp = get_output_buffer();
   ecp->opcode = ICM;
@@ -1264,6 +1319,8 @@ void icm_call_end_state_machine() {
     cesm_state = CESM_WAIT_FOR_PRECOMPILED_EXECUTION;
     icm_config->cesm_ready = 0;
 
+    icm_timing_pause();
+
     // Send ICM_FINISH
     ECP *ecp = get_output_buffer();
     ecp->opcode = ICM;
@@ -1332,6 +1389,7 @@ void icm_call_end_state_machine() {
         call_frame->address,
         caller_frame->stack
       );
+      icm_timing_continue();
     }
 
 #ifdef ICM_DEBUG
@@ -1437,6 +1495,8 @@ void icm_call_end_state_machine() {
     if (icm_stack_is_empty()) {
       cesm_state = CESM_IDLE;
 
+      icm_timing_pause();
+
       // Finish
       ECP *ecp = get_output_buffer();
       ecp->opcode = END;
@@ -1446,7 +1506,9 @@ void icm_call_end_state_machine() {
       ecp->src_offset = 0;
       ecp->dest_offset = 0;
       ecp->length = icm_config->immutable_page_length;
-      build_outgoing_packet(sizeof(ECP));
+      ((uint64_t*)(ecp->data))[0] = total_time;
+      ((uint64_t*)(ecp->data))[1] = COUNTS_PER_SECOND;
+      build_outgoing_packet(sizeof(ECP) + 16);
 #ifdef ICM_DEBUG
     icm_debug("idle", 4);
 #endif
@@ -1497,7 +1559,7 @@ void icm_call_end_state_machine() {
       memset(icm_raw_data_base + 4, 0, 32);
       *(uint8_t*)(icm_raw_data_base + 4) = ((call_frame + 1)->call_end_func != OP_REVERT && (call_frame + 1)->call_end_func != OP_INVALID);
     }
-    aes_decrypt(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * (new_stack_size - 1));
+    aes_decrypt_stack(icm_raw_data_base + 4 + 32, call_frame->stack + 32 * call_frame->num_of_params, 32 * (new_stack_size - 1));
 #ifdef ICM_DEBUG
     icm_debug("recover stack", 13);
     icm_debug(&call_frame->stack_size, 4);
@@ -1591,6 +1653,7 @@ uint8_t icm_decrypt() {
 
       build_outgoing_packet(sizeof(ECP) + 29);
     } else if (req->func == ICM_SET_CONTRACT) {
+      icm_timing_continue();
       if (icm_config->contract_address_waiting_for_size &&
         memcmp(req->data, icm_config->contract_address_waiting_for_size, 20) == 0) {
         fetchBalance(icm_config->contract_address_waiting_for_size, req->data + 20);
@@ -1600,6 +1663,7 @@ uint8_t icm_decrypt() {
         icm_step();
       }  
     } else if (req->func == ICM_FINISH) {
+      icm_timing_continue();
 #ifdef ICM_DEBUG
       icm_debug("received precompiled return value", 33);
       icm_debug(&(icm_config->immutable_page_length), 4);
@@ -1668,6 +1732,7 @@ uint8_t icm_decrypt() {
     return 1;
   } else if (req->opcode == END) {
     // External force quit
+    icm_timing_start();
     reset_udp();
     return 1;
   } else {
@@ -1693,6 +1758,9 @@ uint8_t icm_decrypt() {
         return 0;
       }
 #endif
+
+      icm_timing_continue();
+
 #ifdef ICM_DEBUG
       icm_debug("real sload", 10);
 #endif
@@ -1725,6 +1793,8 @@ uint8_t icm_decrypt() {
       // the size of memory pages are always multiples of 16
       // so there is no need to pad content_length
       if (req->dest == ENV) {
+        // icm_timing_continue();
+
         // plain text
         // [TODO] check integrity <del> by merkle tree </del>
         // [TODO] check integrity by USER signature
@@ -1734,6 +1804,7 @@ uint8_t icm_decrypt() {
     icm_debug("recv env", 8);
 #endif
       } else if (req->dest == CODE) { // After internalize, this will be code only
+        icm_timing_continue();
         call_frame->code_mark[mark_offset(req->dest_offset)] = 1 | (req->func ? 2 : 0);
 
 #ifdef ICM_DEBUG
@@ -1780,6 +1851,7 @@ uint8_t icm_decrypt() {
         
         // icm_debug(icm_raw_data_base, PAGE_SIZE);
       } else if (req->dest == CALLDATA && call_frame == (icm_config->call_stack + 1)) { // After internalize, this will be code only
+        icm_timing_continue();
         call_frame->input_mark[mark_offset(req->dest_offset)] = 1 | 2;  // mark as valid
 #ifdef ICM_DEBUG
         icm_debug("recv input", 10);
@@ -1818,6 +1890,9 @@ uint8_t icm_decrypt() {
           return 0;
         }
 #endif
+
+      icm_timing_continue();
+
 #ifdef ICM_DEBUG
         icm_debug("real query", 10);
 #endif
@@ -1840,6 +1915,7 @@ uint8_t icm_decrypt() {
         return 0;
       }
       
+      icm_timing_continue();
       return 1;
     }
   }
@@ -1887,6 +1963,9 @@ uint8_t icm_encrypt(uint32_t length) {
     // plaintext params
     // memcpy(req->data, icm_raw_data_base, content_length);
     // build_outgoing_packet(sizeof(ECP) + content_length);
+
+    icm_timing_pause();
+
 #ifdef DUMMY
     icm_config->query_real_type = req->func;
     memcpy(icm_config->query_real_address, icm_raw_data_base, 20);
@@ -1974,6 +2053,8 @@ uint8_t icm_encrypt(uint32_t length) {
         icm_config->query_real_type = 0;
         memcpy(icm_config->query_real_address, call_frame->storage_address, sizeof(address_t));
         memcpy(icm_config->sload_real_key, base + 4, sizeof(uint256_t));
+        
+        icm_timing_pause();
 
         // since the swapped-out record has been saved in phase 0
         // we are not sending it again, instead set the output num_of_items to 0
@@ -2188,7 +2269,9 @@ uint8_t icm_encrypt(uint32_t length) {
               icm_debug("send out", 8);
 #endif
               // pass out
+
               // set_retry_send();
+              icm_timing_pause();
               build_outgoing_packet(sizeof(ECP) + cipher_length + 16);
               return 0;
             }
